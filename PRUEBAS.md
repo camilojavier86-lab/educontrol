@@ -1,54 +1,90 @@
-# Verificación de EduControl v1.2.0
+# Verificación de EduControl v1.3.0
 
-## Prueba automatizada integral
+## Prueba automatizada integral desde cero
 
 Ejecutada con:
 
-`node integration-test-v1.2.js`
+`node integration-test-v1.3.js`
 
-Resultado: 35 comprobaciones aprobadas.
+Resultado: **44 comprobaciones aprobadas**.
 
-Flujos verificados:
+Flujo verificado:
 
-1. Migración a esquema 3 manteniendo `educontrol_v1`.
-2. Roles docentes exclusivos: profesor o consejero.
-3. Administrador corrige un estudiante y los demás perfiles reciben el cambio.
-4. Profesor registra y finaliza asistencia.
-5. Una actividad se crea una vez para 8.º A y 8.º B con seguimiento separado.
-6. La entrega toma la clase real del horario.
-7. Profesor califica y publica notas.
-8. Acudiente ve actividad y nota.
-9. El quinto compromiso diario queda bloqueado.
-10. Duplicar crea borradores que no consumen cupo.
-11. Profesor crea citación y acudiente responde.
-12. Acudiente informa justificación formal.
-13. Consejero valida la justificación de su salón.
-14. Profesor ve la ausencia justificada y la respuesta de la citación.
-15. Consejero registra un estudiante sin acudiente y sin duplicar perfiles.
-16. Profesor agrega una hora y el acudiente la ve en el horario consolidado.
-17. El detalle de horario muestra el estado de asistencia.
-18. Los datos permanecen serializados en localStorage.
+1. Primer inicio con elección entre estructura vacía y datos de demostración.
+2. Configuración del colegio y turno por el administrador.
+3. Registro exclusivo de una profesora consejera con fotografía obligatoria.
+4. Creación de su único salón, aula, turno y bachillerato nuevo.
+5. Registro de estudiante sin control de fotografía para el docente.
+6. Docencia de la consejera desde la misma cuenta.
+7. Registro exclusivo de profesor con una materia que no existía.
+8. Creación de horario seleccionando espacios de 45 minutos.
+9. Cálculo automático de 07:00–07:45 para el espacio 1.
+10. Cambio de lugar para una fecha sin alterar el aula habitual.
+11. Actividad en casa conectada a la hora real de clase.
+12. Registro de acudiente con fotografía.
+13. Vinculación por nombre, grado y cédula.
+14. Fotografía del estudiante agregada exclusivamente por su acudiente.
+15. Horario del acudiente formado con la información subida por docentes.
+16. Aviso anticipado de ausencia del estudiante.
+17. Aviso de ausencia docente y validación administrativa.
+18. Reprogramación automática de la actividad a la siguiente clase disponible.
+19. Conservación de penalización y días de atraso en cero.
+20. Creación de alternativa para adelantar una clase con otro profesor libre.
+21. Aceptación del adelanto y registro conectado en `scheduleMoves`.
+22. Persistencia completa tras volver a cargar los datos.
+23. Migración de esquema 3 a 4 manteniendo institución y registros.
 
-## Validaciones de datos iniciales
+## Regresión de los procesos académicos anteriores
 
-- 96 estudiantes.
-- 15 docentes.
-- 8 consejeros, cada uno asociado a un solo salón.
-- 300 actividades.
-- Todas las materias tienen horas en el horario.
-- Cero conflictos ficticios de salón o profesor.
-- Máximo seis clases diarias por profesor.
-- Máximo tres entregas iniciales por salón/día, para dejar cupo de prueba.
-- Nombres y género ficticio coherentes.
+Ejecutada con:
+
+`node regression-test-v1.3.js`
+
+Resultado: **35 comprobaciones adicionales aprobadas**. Se volvieron a verificar sobre los datos de demostración:
+
+- asistencia y cierre automático de ausentes;
+- actividad para varios salones del mismo grado;
+- máximo de cuatro compromisos diarios;
+- calificación en borrador y publicación conjunta;
+- nota visible para el acudiente;
+- citación y respuesta del acudiente;
+- justificación pendiente y validación del consejero;
+- actualización visible para el profesor;
+- creación de estudiante por el consejero;
+- horario consolidado y detalle de asistencia;
+- migración y persistencia.
+
+Total de esta entrega: **79 comprobaciones funcionales aprobadas**.
+
+Resultado concreto de la prueba de reprogramación:
+
+- Fecha original: 28 de septiembre de 2026.
+- Nueva fecha: 5 de octubre de 2026.
+- Razón visible: ausencia docente.
+- Penalización: 0.
 
 ## Verificaciones técnicas
 
-- `node --check app.js`: aprobado.
 - `node --check data.js`: aprobado.
+- `node --check app.js`: aprobado.
+- `node --check sw.js`: aprobado.
 - Clave de almacenamiento: `educontrol_v1`.
-- Versión: `1.2.0`.
-- Esquema: `3`.
-- Los recursos del service worker usan caché `educontrol-shell-v1.2.0`.
+- Versión: `1.3.0`.
+- Esquema: `4`.
+- Caché PWA: `educontrol-shell-v1.3.0`.
 
-La descarga de un navegador automatizado quedó bloqueada por la red del entorno de construcción. La validación móvil se realizó mediante reglas responsive, ausencia de anchos fijos en los nuevos componentes y ejecución funcional simulada con viewport lógico. Conviene confirmar visualmente en el Android real después de publicar.
+## Comprobaciones visuales
 
+- Vista móvil Android: navegación, formularios, botones de tamaño táctil y horario semanal con desplazamiento horizontal.
+- Vista de computadora: menú lateral, tarjetas, formularios y cinco columnas del horario.
+- Ninguna tabla obliga a ampliar toda la página en móvil; se desplaza dentro de su contenedor.
+- Las cápsulas de resumen, materias y horario son botones que abren una vista o detalle real.
+
+## Prueba manual recomendada después de publicar
+
+1. Abrir la URL de GitHub Pages en una pestaña privada.
+2. Elegir **Configurar colegio desde cero**.
+3. Seguir el flujo descrito en la pantalla.
+4. Cerrar y volver a abrir el navegador.
+5. Confirmar que el colegio, perfiles y horarios siguen allí.
+6. Instalar la PWA desde Chrome en Android.

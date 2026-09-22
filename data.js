@@ -1,14 +1,19 @@
-/* EduControl v1.2 - datos, persistencia y migraciones.
+/* EduControl v1.3 - datos, persistencia y migraciones.
    La clave educontrol_v1 es deliberadamente estable para futuras actualizaciones. */
 (function () {
   "use strict";
 
   const STORAGE_KEY = "educontrol_v1";
   const SESSION_KEY = "educontrol_session_v1";
-  const APP_VERSION = "1.2.0";
-  const SCHEMA_VERSION = 3;
+  const APP_VERSION = "1.3.0";
+  const SCHEMA_VERSION = 4;
   const DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
   const COLORS = ["#2b73c2", "#0f9b8e", "#9a5fb4", "#d97936", "#5468b1", "#2f8b63", "#ba4b62", "#557986", "#8c6b34", "#45829d", "#7a5ab5", "#aa5d29", "#287e72"];
+  const DEFAULT_SHIFT_TEMPLATES = [
+    { id: "shift-morning", name: "Matutino", start: "07:00", periods: 7, recessAfter: 3, recessMinutes: 20, active: true },
+    { id: "shift-afternoon", name: "Vespertino", start: "12:45", periods: 7, recessAfter: 3, recessMinutes: 20, active: true }
+  ];
+  const DEFAULT_LOCATIONS = ["Gimnasio", "Cancha", "Laboratorio de informática", "Laboratorio de ciencias", "Biblioteca", "Taller", "Auditorio", "Área de proyectos", "Trabajo de campo"];
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const uid = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -21,6 +26,32 @@
   };
   const oneDecimal = (value) => Math.round((Number(value) + Number.EPSILON) * 10) / 10;
   const normalize = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  function clockToMinutes(value) {
+    const [hour, minute] = String(value || "00:00").split(":").map(Number);
+    return hour * 60 + minute;
+  }
+
+  function minutesToClock(value) {
+    const minutes = ((Number(value) % 1440) + 1440) % 1440;
+    return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  }
+
+  function buildShiftSlots(template) {
+    const slots = [];
+    let cursor = clockToMinutes(template?.start || "07:00");
+    const periods = Math.max(1, Number(template?.periods || 1));
+    for (let index = 1; index <= periods; index += 1) {
+      const start = minutesToClock(cursor); const end = minutesToClock(cursor + 45);
+      slots.push({ index, label: `Espacio ${index}`, start, end, kind: "CLASS" });
+      cursor += 45;
+      if (Number(template?.recessAfter || 0) === index && Number(template?.recessMinutes || 0) > 0) {
+        slots.push({ index: `break-${index}`, label: "Recreo", start: minutesToClock(cursor), end: minutesToClock(cursor + Number(template.recessMinutes)), kind: "BREAK" });
+        cursor += Number(template.recessMinutes);
+      }
+    }
+    return slots;
+  }
 
   const SUBJECT_DEFINITIONS = [
     ["Matemática", "t-andres"], ["Español", "t-carolina"], ["Ciencias", "t-daniel"],
@@ -51,6 +82,7 @@
       id, name, specialty, email, phone,
       role: counselorClassId ? "COUNSELOR" : "TEACHER",
       primarySubjectCatalogId: `cat-${normalize(specialty.split(" y ")[0])}`,
+      subjectCatalogIds: [`cat-${normalize(specialty.split(" y ")[0])}`],
       counselorClassId: counselorClassId || null, photo: "", active: true, createdAt: dateIso(-180)
     }));
   }
@@ -65,7 +97,13 @@
       ["c-9a", "9.º", "A", "Premedia", "Matutino", "t-ana"],
       ["c-10b", "10.º", "B", "Media", "Vespertino", "t-sofia"],
       ["c-11a", "11.º", "A", "Media", "Matutino", "t-marcos"]
-    ].map(([id, grade, section, level, shift, counselorId]) => ({ id, grade, section, level, shift, counselorId, createdByCounselorId: counselorId, room: `Aula ${grade.replace(".º", "")}${section}`, image: "", active: true }));
+    ].map(([id, grade, section, level, shift, counselorId]) => ({
+      id, grade, section, level, shift,
+      shiftTemplateId: shift === "Vespertino" ? "shift-afternoon" : "shift-morning",
+      programId: level === "Media" ? "prog-ciencias" : "prog-no-aplica",
+      counselorId, createdByCounselorId: counselorId,
+      room: `Aula ${grade.replace(".º", "")}${section}`, image: "", active: true
+    }));
   }
 
   const guardianNames = [
@@ -229,7 +267,7 @@
             const ranked = options.map((item, index) => ({ item, score: (counts.get(item.id) || 0) * 100 + ((index - rotation + options.length) % options.length) })).sort((a, b) => a.score - b.score);
             const selected = ranked.find(({ item }) => !usedTeachers.has(item.teacherId))?.item || ranked[0].item;
             usedTeachers.add(selected.teacherId); counts.set(selected.id, (counts.get(selected.id) || 0) + 1);
-            schedule.push({ id: `sch-${schoolClass.id}-${dayIndex}-${periodIndex}`, classId: schoolClass.id, assignmentId: selected.id, teacherId: selected.teacherId, day, start, end, room: schoolClass.room, kind: "CLASS", active: true });
+            schedule.push({ id: `sch-${schoolClass.id}-${dayIndex}-${periodIndex}`, classId: schoolClass.id, assignmentId: selected.id, teacherId: selected.teacherId, day, start, end, slotIndex: periodIndex + 1, span: 1, room: schoolClass.room, habitualRoom: schoolClass.room, kind: "CLASS", active: true });
           });
         });
         shiftClasses.forEach((schoolClass) => schedule.push({ id: `sch-break-${schoolClass.id}-${dayIndex}`, classId: schoolClass.id, assignmentId: null, teacherId: null, day, start: shift === "Vespertino" ? "15:00" : "09:15", end: shift === "Vespertino" ? "15:20" : "09:35", room: "Área común", kind: "BREAK", active: true }));
@@ -339,6 +377,31 @@
     }));
   }
 
+  function createBlankData(chooseMode = false) {
+    const year = new Date().getFullYear();
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      appVersion: APP_VERSION,
+      setupState: chooseMode ? "CHOOSE" : "READY",
+      dataMode: chooseMode ? "UNSET" : "BLANK",
+      createdAt: nowIso(), updatedAt: nowIso(),
+      institution: {
+        name: chooseMode ? "EduControl" : "Mi colegio",
+        motto: chooseMode ? "Configura tu institución o utiliza la demostración" : "",
+        logo: "", primary: "#0b3155", secondary: "#0f9b8e",
+        activeYear: year, currentTrimester: 1, dailySummaryDelayMinutes: 60
+      },
+      years: [{ year, status: "ACTIVE", closedAt: null }],
+      admins: [{ id: "admin", name: "Administrador", email: "", active: true }],
+      teachers: [], guardians: [], classes: [], students: [], subjectCatalog: [],
+      assignments: [], schedule: [], activities: [], attendance: [], citations: [],
+      authorizations: [], observations: [], extensions: [], groups: [], justifications: [],
+      notifications: [], audit: [], invitations: [], linkRequests: [], archives: [], trash: [],
+      programs: [], shiftTemplates: [], locations: [], scheduleOverrides: [],
+      studentAbsenceNotices: [], teacherAbsences: [], coverageProposals: [], scheduleMoves: []
+    };
+  }
+
   function createSeedData() {
     const teachers = createTeachers();
     const classes = createClasses();
@@ -426,6 +489,7 @@
     return {
       schemaVersion: SCHEMA_VERSION,
       appVersion: APP_VERSION,
+      setupState: "READY", dataMode: "DEMO",
       createdAt: nowIso(), updatedAt: nowIso(),
       institution: {
         name: "Colegio Horizonte de Panamá", motto: "Aprender, convivir y avanzar juntos", logo: "",
@@ -435,10 +499,18 @@
       years: [{ year: 2025, status: "CLOSED", closedAt: "2025-12-12T18:00:00.000Z" }, { year: 2026, status: "ACTIVE", closedAt: null }],
       admins: [{ id: "admin", name: "Administración EduControl", email: "admin@horizonte.edu.pa", active: true }],
       teachers, guardians, classes, students,
-      subjectCatalog: SUBJECT_DEFINITIONS.map(([name]) => ({ id: `cat-${normalize(name)}`, name, active: true })),
+      subjectCatalog: SUBJECT_DEFINITIONS.map(([name, teacherId]) => ({ id: `cat-${normalize(name)}`, name, ownerTeacherId: teacherId, level: "Todos", programId: "prog-no-aplica", shiftTemplateId: null, active: true })),
       assignments, schedule, activities, attendance, citations, authorizations, observations,
       extensions, groups, justifications, notifications, audit, invitations,
-      linkRequests: [], archives: [], trash: []
+      linkRequests: [], archives: [], trash: [],
+      programs: [
+        { id: "prog-no-aplica", name: "No aplica", level: "Todos", active: true },
+        { id: "prog-ciencias", name: "Bachillerato en Ciencias", level: "Media", active: true },
+        { id: "prog-comercio", name: "Bachillerato en Comercio", level: "Media", active: true }
+      ],
+      shiftTemplates: clone(DEFAULT_SHIFT_TEMPLATES),
+      locations: DEFAULT_LOCATIONS.map((name, index) => ({ id: `loc-${index + 1}`, name, active: true })),
+      scheduleOverrides: [], studentAbsenceNotices: [], teacherAbsences: [], coverageProposals: [], scheduleMoves: []
     };
   }
 
@@ -475,10 +547,45 @@
         item.deliveryWeek = item.deliveryWeek || "";
       });
     }
+    if (version < 4) {
+      data.setupState = data.setupState || "READY";
+      data.dataMode = data.dataMode || "MIGRATED";
+      if (!Array.isArray(data.programs) || !data.programs.length) {
+        data.programs = [
+          { id: "prog-no-aplica", name: "No aplica", level: "Todos", active: true },
+          { id: "prog-ciencias", name: "Bachillerato en Ciencias", level: "Media", active: true }
+        ];
+      }
+      if (!Array.isArray(data.shiftTemplates) || !data.shiftTemplates.length) data.shiftTemplates = clone(DEFAULT_SHIFT_TEMPLATES);
+      if (!Array.isArray(data.locations)) data.locations = DEFAULT_LOCATIONS.map((name, index) => ({ id: `loc-${index + 1}`, name, active: true }));
+      (data.teachers || []).forEach((teacher) => {
+        teacher.subjectCatalogIds = Array.isArray(teacher.subjectCatalogIds) ? teacher.subjectCatalogIds : [teacher.primarySubjectCatalogId].filter(Boolean);
+      });
+      (data.subjectCatalog || []).forEach((subject) => {
+        subject.ownerTeacherId = subject.ownerTeacherId || (data.assignments || []).find((assignment) => assignment.catalogId === subject.id)?.teacherId || null;
+        subject.level = subject.level || "Todos";
+        subject.programId = subject.programId || "prog-no-aplica";
+        subject.shiftTemplateId = subject.shiftTemplateId || null;
+      });
+      (data.classes || []).forEach((schoolClass) => {
+        schoolClass.shiftTemplateId = schoolClass.shiftTemplateId || data.shiftTemplates.find((shift) => normalize(shift.name) === normalize(schoolClass.shift))?.id || data.shiftTemplates[0]?.id || null;
+        schoolClass.shift = data.shiftTemplates.find((shift) => shift.id === schoolClass.shiftTemplateId)?.name || schoolClass.shift || "Sin turno";
+        schoolClass.programId = schoolClass.programId || (schoolClass.level === "Media" ? "prog-ciencias" : "prog-no-aplica");
+      });
+      (data.schedule || []).forEach((slot) => {
+        const schoolClass = (data.classes || []).find((item) => item.id === slot.classId);
+        const template = data.shiftTemplates.find((item) => item.id === schoolClass?.shiftTemplateId);
+        const period = buildShiftSlots(template).find((item) => item.kind === "CLASS" && item.start === slot.start);
+        slot.slotIndex = Number(slot.slotIndex || period?.index || 1);
+        slot.span = Number(slot.span || Math.max(1, Math.round((clockToMinutes(slot.end) - clockToMinutes(slot.start)) / 45)));
+        slot.habitualRoom = slot.habitualRoom || slot.room || schoolClass?.room || "Aula del salón";
+        slot.room = slot.room || slot.habitualRoom;
+      });
+    }
     data.schemaVersion = SCHEMA_VERSION;
     data.appVersion = APP_VERSION;
     data.updatedAt = data.updatedAt || nowIso();
-    ["admins", "teachers", "guardians", "classes", "students", "subjectCatalog", "assignments", "schedule", "activities", "attendance", "citations", "authorizations", "observations", "extensions", "groups", "justifications", "notifications", "audit", "invitations", "linkRequests", "archives", "trash"].forEach((key) => {
+    ["admins", "teachers", "guardians", "classes", "students", "subjectCatalog", "assignments", "schedule", "activities", "attendance", "citations", "authorizations", "observations", "extensions", "groups", "justifications", "notifications", "audit", "invitations", "linkRequests", "archives", "trash", "programs", "shiftTemplates", "locations", "scheduleOverrides", "studentAbsenceNotices", "teacherAbsences", "coverageProposals", "scheduleMoves"].forEach((key) => {
       if (!Array.isArray(data[key])) data[key] = [];
     });
     return data;
@@ -488,9 +595,9 @@
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (!saved) {
-        const seed = createSeedData();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
-        return seed;
+        const firstRun = createBlankData(true);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(firstRun));
+        return firstRun;
       }
       const migrated = migrateData(JSON.parse(saved));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
@@ -529,7 +636,8 @@
   window.EduData = {
     STORAGE_KEY, SESSION_KEY, APP_VERSION, SCHEMA_VERSION, DAYS,
     clone, uid, nowIso, dateIso, oneDecimal, normalize,
-    createSeedData, migrateData, loadData, saveData,
+    DEFAULT_SHIFT_TEMPLATES, DEFAULT_LOCATIONS, buildShiftSlots,
+    createBlankData, createSeedData, migrateData, loadData, saveData,
     classLabel, personName, assignmentLabel, addAudit, addNotification
   };
 })();
