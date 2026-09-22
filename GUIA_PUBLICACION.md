@@ -1,43 +1,37 @@
-# Publicar EduControl en GitHub Pages
+# Publicar EduControl v1.2.0 en GitHub Pages
 
-## Primera publicación
+## Si ya tiene v1.1 publicada
 
-1. Entre a GitHub y cree un repositorio nuevo llamado `educontrol`.
-2. Elija repositorio **Public** y pulse **Create repository**.
-3. Descomprima `EduControl_v1.1_actualizacion.zip` en su computadora.
-4. En la página del repositorio, pulse **Add file** → **Upload files**.
-5. Arrastre todos los archivos descomprimidos. Deben quedar directamente en la raíz, no dentro de otra carpeta.
-6. Pulse **Commit changes**.
-7. Abra **Settings** → **Pages**.
-8. En **Build and deployment**, elija **Deploy from a branch**.
-9. Seleccione la rama **main** y la carpeta **/(root)**. Pulse **Save**.
-10. Espere uno o dos minutos. La dirección será parecida a:
+1. Descargue `EduControl_v1.2_actualizacion.zip`.
+2. Descomprímalo.
+3. Abra el repositorio `educontrol` en GitHub.
+4. Entre en **Code / Código**.
+5. Use **Add file / Agregar archivo → Upload files / Cargar archivos**.
+6. Suba directamente los archivos extraídos a la raíz del repositorio.
+7. Confirme con **Commit changes / Confirmar cambios**.
+8. Espere uno o dos minutos y abra la dirección de GitHub Pages.
 
-   `https://SU_USUARIO.github.io/educontrol/`
+Los archivos deben quedar en la raíz; no suba la carpeta `EduControl_v1.2` completa como una subcarpeta.
+
+## Si el teléfono sigue mostrando v1.1
+
+1. Abra la página.
+2. Recargue una vez.
+3. Si sigue igual, cierre la pestaña y vuelva a abrirla.
+4. Como último paso, borre únicamente la caché del sitio; no borre los datos del sitio si quiere conservar sus pruebas.
+
+El nuevo service worker elimina la caché v1.1 y usa `educontrol-shell-v1.2.0`. La base local conserva la clave `educontrol_v1` y se migra sin restablecerla.
+
+## Publicación nueva
+
+1. Cree un repositorio público llamado `educontrol`.
+2. Cargue el contenido de `EduControl_v1.2_respaldo_completo.zip` en la raíz.
+3. Abra **Settings / Configuración → Pages / Páginas**.
+4. En **Build and deployment / Compilación e implementación**, elija **Deploy from a branch / Implementar desde una rama**.
+5. Seleccione `main` y `/ (root)`; guarde.
+6. Abra `https://<usuario>.github.io/educontrol/` cuando GitHub indique que la publicación terminó.
 
 ## Instalar en Android
 
-1. Abra la dirección publicada con Chrome.
-2. Abra el menú de tres puntos.
-3. Elija **Instalar aplicación** o **Agregar a pantalla principal**.
+Abra la dirección publicada en Chrome y use **Agregar a pantalla principal** o **Instalar aplicación**, según la opción que muestre el navegador.
 
-La opción puede tardar unos segundos en aparecer durante la primera visita.
-
-## Actualizaciones futuras
-
-1. Use solamente el ZIP de actualización de la versión nueva.
-2. Suba sus archivos a la raíz del mismo repositorio y confirme que desea reemplazarlos.
-3. No borre el almacenamiento del navegador y no use Restablecer datos de demostración.
-4. Abra EduControl y recargue la página. Si el navegador conserva una versión visual anterior, cierre la PWA y ábrala nuevamente.
-
-La clave `educontrol_v1` permanece estable. Las futuras versiones deberán incluir migraciones cuando cambie la estructura de datos.
-
-## Respaldo de datos creados durante la prueba
-
-Antes de una actualización importante:
-
-1. Entre como Administrador.
-2. Abra **Configuración**.
-3. Pulse **Descargar respaldo JSON**.
-
-Ese archivo permite recuperar los datos desde **Importar respaldo JSON** en el mismo módulo.

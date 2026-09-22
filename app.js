@@ -16,12 +16,17 @@
     attendanceDate: D.dateIso(0),
     selectedStudentId: null,
     selectedSubjectId: null,
+    guardianScheduleDate: D.dateIso(0),
     filters: {}
   };
 
   function loadSession() {
     try {
       const value = JSON.parse(sessionStorage.getItem(D.SESSION_KEY) || "null");
+      if (value && ["TEACHER", "COUNSELOR"].includes(value.role)) {
+        const profile = data.teachers.find((item) => item.id === value.actorId);
+        if (profile?.role && profile.role !== value.role) value.role = profile.role;
+      }
       return value && value.role ? value : null;
     } catch (_) { return null; }
   }
@@ -96,10 +101,47 @@
       RESPONDED: ["Respondida", "success"], VALIDATED: ["Validada", "success"], AUTHORIZED: ["Autorizado", "success"],
       DENIED: ["No autorizado", "danger"], RECEIVED: ["Recibido", "success"], NOT_DELIVERED: ["No entregado", "danger"],
       FINAL_ZERO: ["0.0 definitivo", "danger"], ACTIVE: ["Activo", "success"], CLOSED: ["Cerrado", "info"],
-      SENT: ["Invitación enviada", "success"], ACTIVATED: ["Cuenta activada", "success"], ANNULLED: ["Anulado", "danger"]
+      SENT: ["Invitación enviada", "success"], ACTIVATED: ["Cuenta activada", "success"], ANNULLED: ["Anulado", "danger"],
+      SCHEDULED: ["Programada", "violet"], VISIBLE: ["Visible", "success"], PAUSED: ["Pausada", "warning"]
     };
     const pair = labels[status] || [String(status || "—"), "info"];
     return `<span class="pill ${pair[1]}">${esc(pair[0])}</span>`;
+  }
+
+  function addDays(dateValue, days) {
+    const date = new Date(`${dateValue}T12:00:00`); date.setDate(date.getDate() + Number(days || 0));
+    return date.toISOString().slice(0, 10);
+  }
+  function weekValue(dateValue = D.dateIso(0)) {
+    const date = new Date(`${dateValue}T12:00:00`); const target = new Date(date);
+    target.setDate(target.getDate() + 4 - (target.getDay() || 7));
+    const yearStart = new Date(target.getFullYear(), 0, 1);
+    const week = Math.ceil((((target - yearStart) / 86400000) + 1) / 7);
+    return `${target.getFullYear()}-W${String(week).padStart(2, "0")}`;
+  }
+  function mondayForWeek(value) {
+    const match = /^(\d{4})-W(\d{2})$/.exec(value || "");
+    if (!match) return D.dateIso(0);
+    const year = Number(match[1]); const week = Number(match[2]); const jan4 = new Date(year, 0, 4, 12);
+    const monday = new Date(jan4); monday.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7) + (week - 1) * 7);
+    return monday.toISOString().slice(0, 10);
+  }
+  function activityReservesCapacity(activity) {
+    return activity.active !== false && ["SCHEDULED", "PUBLISHED", "CLOSED"].includes(activity.planStatus || (activity.status === "PUBLISHED" ? "PUBLISHED" : "DRAFT"));
+  }
+  function workloadCount(classId, date, excludingBatch = null) {
+    return data.activities.filter((activity) => activity.classId === classId && activity.dueDate === date && activity.batchId !== excludingBatch && activityReservesCapacity(activity)).length;
+  }
+  function processScheduledActivities() {
+    const now = Date.now(); let changed = false;
+    data.activities.forEach((activity) => {
+      if (activity.active !== false && activity.planStatus === "SCHEDULED" && activity.publishAt && new Date(activity.publishAt).getTime() <= now) {
+        activity.planStatus = "PUBLISHED"; activity.visibleAt = D.nowIso(); changed = true;
+        const assignment = assignmentById(activity.assignmentId);
+        data.students.filter((student) => student.classId === activity.classId && student.active && student.guardianId).forEach((student) => D.addNotification(data, "GUARDIAN", student.guardianId, "ACTIVITY", "Nueva actividad publicada", `${activity.name} · ${assignment?.name || "Materia"} · entrega ${formatDate(activity.dueDate)}.`, student.id));
+      }
+    });
+    if (changed) D.saveData(data);
   }
 
   function icon(name) {
@@ -180,13 +222,36 @@
   function chooseRole(role) {
     if (role === "ADMIN") { enterRole("ADMIN", "admin", false); return; }
     let people = [];
-    if (role === "TEACHER") people = data.teachers.filter((item) => item.active);
-    if (role === "COUNSELOR") people = data.teachers.filter((item) => item.active && item.counselorClassId);
+    if (role === "TEACHER") people = data.teachers.filter((item) => item.active && item.role === "TEACHER");
+    if (role === "COUNSELOR") people = data.teachers.filter((item) => item.active && item.role === "COUNSELOR");
     if (role === "GUARDIAN") people = data.guardians.filter((item) => item.active);
-    showModal(`Entrar como ${roleLabel(role).toLowerCase()}`, `<div class="notice">Este acceso de demostración permite probar los datos compartidos sin contraseñas reales.</div><div class="list" style="margin-top:14px">${people.map((person) => {
-      const note = role === "GUARDIAN" ? `${data.students.filter((student) => student.guardianId === person.id).length} estudiante(s)` : role === "COUNSELOR" ? `Consejero de ${D.classLabel(data, person.counselorClassId)}` : person.specialty;
-      return `<button type="button" class="list-row interactive-row" data-action="enter-role" data-role="${role}" data-id="${person.id}"><span class="list-row-main">${avatarMarkup(person)}<span><strong>${esc(person.name)}</strong><small>${esc(note)}</small></span></span><span class="pill info">Entrar →</span></button>`;
-    }).join("")}</div>`, "", null, false);
+    const createLabel = role === "GUARDIAN" ? "Crear mi perfil de acudiente" : role === "COUNSELOR" ? "Crear mi perfil de consejero" : "Crear mi perfil de profesor";
+    showModal(`Entrar como ${roleLabel(role).toLowerCase()}`, `<div class="notice">Cada docente utiliza una sola entrada: profesor o consejero. Un consejero también enseña su materia desde esa misma cuenta.</div><label class="field" style="margin-top:14px"><span>Buscar perfil</span><input class="input" data-list-search placeholder="Nombre, materia o correo"></label><div class="list searchable-list" style="margin-top:14px">${people.map((person) => {
+      const note = role === "GUARDIAN" ? `${data.students.filter((student) => student.guardianId === person.id).length} estudiante(s)` : role === "COUNSELOR" ? `${person.specialty} · ${person.counselorClassId ? `Consejero de ${D.classLabel(data, person.counselorClassId)}` : "Salón por crear"}` : person.specialty;
+      return `<button type="button" class="list-row interactive-row" data-search-text="${attr(`${person.name} ${person.email} ${note}`)}" data-action="enter-role" data-role="${role}" data-id="${person.id}"><span class="list-row-main">${avatarMarkup(person)}<span><strong>${esc(person.name)}</strong><small>${esc(note)}</small></span></span><span class="pill info">Entrar →</span></button>`;
+    }).join("")}</div><button type="button" class="button secondary wide-action" data-action="register-profile" data-role="${role}">${icon("plus")} ${esc(createLabel)}</button>`, "", null, false);
+  }
+
+  function openRegistration(role) {
+    const isGuardian = role === "GUARDIAN";
+    const catalogs = data.subjectCatalog.filter((item) => item.active);
+    showModal(isGuardian ? "Crear perfil de acudiente" : role === "COUNSELOR" ? "Crear perfil de profesor consejero" : "Crear perfil de profesor", `${formSteps(["Fotografía", "Contacto", isGuardian ? "Familia" : "Materia"], 3)}<div class="form-grid">${photoPicker("", "Fotografía obligatoria")}<label class="field wide"><span>Nombre completo</span><input class="input" name="name" required></label><label class="field"><span>Correo</span><input class="input" type="email" name="email" required></label><label class="field"><span>Teléfono</span><input class="input" name="phone" required></label>${isGuardian ? `<label class="field"><span>WhatsApp</span><input class="input" name="whatsapp" required></label><label class="field"><span>Parentesco</span><select class="select" name="relationship">${["Madre", "Padre", "Acudiente", "Tutor legal"].map((value) => option(value, value, "Acudiente")).join("")}</select></label><label class="field wide"><span>Residencia (opcional)</span><input class="input" name="residence"></label>` : `<label class="field wide"><span>Materia principal</span><select class="select" name="catalogId" required>${catalogs.map((item) => option(item.id, item.name, "")).join("")}</select></label><div class="notice success wide">${role === "COUNSELOR" ? "Después de guardar crearás un único salón de consejería. También podrás enseñar tu materia en otros salones desde esta misma cuenta." : "Después de guardar podrás seleccionar salones existentes al registrar tu horario."}</div>`}</div>`, "Crear perfil", (form) => {
+      const photo = form.get("photo");
+      if (!photo || !photo.size) return showFormError("La fotografía del perfil es obligatoria."), false;
+      const name = form.get("name").trim(); const email = form.get("email").trim();
+      if (data.teachers.some((item) => D.normalize(item.email) === D.normalize(email)) || data.guardians.some((item) => D.normalize(item.email) === D.normalize(email))) return showFormError("Ya existe un perfil con ese correo."), false;
+      saveCompressedPhoto(photo, (photoValue) => {
+        if (isGuardian) {
+          const record = { id: D.uid("g"), name, email, phone: form.get("phone"), whatsapp: form.get("whatsapp"), relationship: form.get("relationship"), residence: form.get("residence"), photo: photoValue || "", active: true, privacy: { phone: { published: false, audience: "Colegio solamente" }, whatsapp: { published: true, audience: "Profesores autorizados" }, email: { published: false, audience: "Nadie" }, residence: { published: false, audience: "Nadie" } } };
+          data.guardians.push(record); D.addAudit(data, record.id, "CREÓ SU PERFIL", `${record.name} · Acudiente`, "IMPORTANT"); D.saveData(data); enterRole("GUARDIAN", record.id, false);
+        } else {
+          const catalog = data.subjectCatalog.find((item) => item.id === form.get("catalogId"));
+          const record = { id: D.uid("t"), name, email, phone: form.get("phone"), specialty: catalog?.name || "Materia", primarySubjectCatalogId: catalog?.id || null, role, counselorClassId: null, photo: photoValue || "", active: true, createdAt: D.dateIso(0) };
+          data.teachers.push(record); D.addAudit(data, record.id, "CREÓ SU PERFIL DOCENTE", `${record.name} · ${roleLabel(role)} · ${record.specialty}`, "IMPORTANT"); D.saveData(data); enterRole(role, record.id, false);
+        }
+      });
+      return false;
+    }, false);
   }
 
   function enterRole(role, actorId, adminOrigin) {
@@ -208,7 +273,7 @@
     ];
     if (role === "COUNSELOR") return [
       ["dashboard", "Dashboard", "dashboard"], ["classroom", "Mi salón", "school"], ["justifications", "Justificaciones", "shield"],
-      ["attendance", "Asistencia", "check"], ["activities", "Actividades y notas", "clipboard"], ["schedule", "Horario", "calendar"],
+      ["subjects", "Mis materias", "book"], ["attendance", "Asistencia", "check"], ["activities", "Actividades y notas", "clipboard"], ["schedule", "Horario", "calendar"],
       ["groups", "Grupos y prórrogas", "users"], ["observations", "Observaciones", "message"], ["citations", "Citaciones", "calendar"],
       ["invitations", "Invitaciones", "send"], ["notifications", "Notificaciones", "bell"], ["reports", "Reportes", "report"]
     ];
@@ -237,12 +302,14 @@
   }
 
   function render() {
+    processScheduledActivities();
     document.documentElement?.style?.setProperty("--navy", data.institution.primary || "#0b3155");
     document.documentElement?.style?.setProperty("--teal", data.institution.secondary || "#0f9b8e");
     if (!state.session) renderLogin();
     else if (state.session.role === "ADMIN") renderShell(renderAdmin(), navForRole("ADMIN"));
     else if (state.session.role === "GUARDIAN") renderGuardian();
     else renderShell(renderTeacher(), navForRole(state.session.role));
+    if (state.session?.role === "ADMIN") app.querySelectorAll('[data-action="new-user"],[data-action="new-student"],[data-action="new-class"]').forEach((button) => button.remove());
     setTimeout(enhanceResponsiveTables, 0);
   }
 
@@ -434,13 +501,21 @@
     return `${pageHead("Registro por clase", "Asistencia", "Al finalizar, los estudiantes no marcados cambian automáticamente a ausente.", `<button class="button secondary" data-action="mark-all-present">${icon("check")} Marcar pendientes presentes</button><button class="button warning" data-action="finalize-attendance" ${unmarked ? "" : "disabled"}>Finalizar clase (${unmarked})</button>`)}${assignmentToolbar()}<div class="toolbar"><label class="field"><span>Fecha</span><input class="input" type="date" data-state="attendanceDate" value="${state.attendanceDate}"></label><span class="pill info">${esc(D.classLabel(data, assignment.classId))}</span><span class="pill ${unmarked ? "danger" : "success"}">${unmarked} sin marcar</span></div><section class="attendance-grid">${students.map((student) => { const record = records.find((item) => item.studentId === student.id); const css = String(record.status).toLowerCase(); return `<article class="attendance-card ${css}"><div class="attendance-person">${avatarMarkup(student)}<div class="attendance-name">${esc(student.name)}</div></div><div class="attendance-status">${statusPill(record.status)}${record.time ? ` <span class="pill info">${record.time}</span>` : ""}</div><div class="attendance-actions"><button class="button small secondary" data-action="mark-attendance" data-student="${student.id}" data-status="PRESENT">Presente</button><button class="button small ghost" data-action="mark-attendance" data-student="${student.id}" data-status="LATE">Tardanza</button><button class="button small ghost" data-action="mark-attendance" data-student="${student.id}" data-status="EARLY">Retiro</button>${record.status !== "UNMARKED" ? `<button class="button small ghost" data-action="mark-attendance" data-student="${student.id}" data-status="UNMARKED">${icon("trash")} Borrar marca</button>` : ""}</div></article>`; }).join("")}</section>`;
   }
 
-  function renderActivities() {
+  function renderActivitiesLegacy() {
     const assignment = selectedTeacherAssignment();
     if (!assignment) return empty("Sin materias", "No hay asignaciones activas.");
     const activities = data.activities.filter((item) => item.assignmentId === assignment.id && item.active !== false).sort((a, b) => b.dueDate.localeCompare(a.dueDate));
     const academicWeight = activities.reduce((sum, item) => sum + Number(item.weight), 0);
     const rulesOkay = activities.every((item) => item.type === "Examen final" ? Number(item.weight) === 25 : Number(item.weight) <= 25);
     return `${pageHead("Evaluación", "Actividades y notas", "Las notas permanecen en borrador hasta que el profesor publica la evaluación.", `<button class="button" data-action="new-activity">${icon("plus")} Crear actividad</button>`)}${assignmentToolbar()}<div class="notice ${academicWeight > 95 || !rulesOkay ? "danger" : "success"}" style="margin-bottom:16px">Esquema actual: asistencia 5% fija + actividades ${academicWeight}%. ${academicWeight === 95 && rulesOkay ? "Total validado: 100%." : `Pendiente por asignar: ${Math.max(0, 95 - academicWeight)}%.`}</div><section class="card"><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Actividad</th><th>Fecha</th><th>Peso</th><th>Entregas / notas</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${activities.map((activity) => { const graded = activity.grades.filter((item) => item.finalGrade != null).length; const received = activity.grades.filter((item) => item.delivery === "RECEIVED").length; return `<tr><td><strong>${esc(activity.name)}</strong><div class="muted small-text">${esc(activity.type)} · ${activity.isGroup ? "Grupal" : "Individual"}</div></td><td>${formatDate(activity.dueDate)}<div class="muted small-text">Máxima ${formatDate(activity.maxDate)}</div></td><td>${activity.weight}%</td><td>${received} recibidos · ${graded} calificados</td><td>${statusPill(activity.status)}</td><td><div class="list-actions"><button class="button ghost small" data-action="grade-activity" data-id="${activity.id}">Calificar</button>${activity.status === "DRAFT" ? `<button class="button secondary small" data-action="publish-activity" data-id="${activity.id}">Publicar notas</button>` : ""}<button class="button ghost small" data-action="edit-activity" data-id="${activity.id}">${icon("edit")}</button><button class="button ghost small" data-action="delete-activity" data-id="${activity.id}">${icon("trash")}</button></div></td></tr>`; }).join("")}</tbody></table></div></div></section>`;
+  }
+
+  function renderActivities() {
+    const assignment = selectedTeacherAssignment();
+    if (!assignment) return empty("Sin materias", "Registra primero una hora de tu materia en un salón existente.");
+    const activities = data.activities.filter((item) => item.assignmentId === assignment.id && item.active !== false).sort((a, b) => b.dueDate.localeCompare(a.dueDate));
+    const academicWeight = activities.reduce((sum, item) => sum + Number(item.weight || 0), 0);
+    return `${pageHead("Planificación y evaluación", "Actividades", "Planifica por grado y semana; la entrega toma automáticamente la hora de clase de cada sección.", `<button class="button" data-action="new-activity">${icon("plus")} Planificar actividad</button>`)}${assignmentToolbar()}<div class="planner-summary"><span class="pill info">Asistencia 5% fija</span><span class="pill ${academicWeight > 95 ? "danger" : "success"}">${academicWeight}% académico configurado</span><span class="pill violet">Máximo 4 entregas diarias</span></div><section class="card"><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Actividad</th><th>Entrega automática</th><th>Publicación</th><th>Notas</th><th>Acciones</th></tr></thead><tbody>${activities.map((activity) => { const graded = activity.grades.filter((item) => item.finalGrade != null).length; const meeting = activity.dueStart ? `${activity.dueStart}${activity.dueEnd ? `–${activity.dueEnd}` : ""}` : "hora de clase"; return `<tr><td><strong>${esc(activity.name)}</strong><div class="muted small-text">${esc(activity.type)} · ${esc(activity.location || "En clase")} · ${activity.weight}%</div></td><td><strong>${formatDate(activity.dueDate)}</strong><div class="muted small-text">${meeting} · ${esc(D.classLabel(data, activity.classId))}</div></td><td>${statusPill(activity.planStatus || (activity.status === "PUBLISHED" ? "PUBLISHED" : "DRAFT"))}${activity.publishAt ? `<div class="muted small-text">${formatDate(activity.publishAt, true)}</div>` : ""}</td><td>${graded}/${activity.grades.length} calificadas<br>${activity.status === "PUBLISHED" ? `<span class="pill success">Notas publicadas</span>` : `<span class="pill info">Notas en borrador</span>`}</td><td><div class="list-actions"><button class="button ghost small" data-action="grade-activity" data-id="${activity.id}">Calificar</button>${activity.status === "DRAFT" ? `<button class="button secondary small" data-action="publish-activity" data-id="${activity.id}">Publicar notas</button>` : ""}<button class="button ghost small" data-action="duplicate-activity" data-id="${activity.id}">${icon("copy")} Duplicar</button><button class="button ghost small" data-action="edit-activity" data-id="${activity.id}">${icon("edit")}</button><button class="button ghost small danger-text" data-action="delete-activity" data-id="${activity.id}">${icon("trash")}</button></div></td></tr>`; }).join("")}</tbody></table></div>${!activities.length ? empty("Sin actividades", "Crea un borrador o planifica las actividades del trimestre.") : ""}</div></section>`;
   }
 
   function renderTeacherSchedule() {
@@ -472,12 +547,30 @@
     return `${pageHead("Relación con acudientes", "Citaciones", "El acudiente responde únicamente si asistirá o no podrá asistir.", `<button class="button" data-action="new-citation">${icon("plus")} Crear citación</button>`)}<section class="card"><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Estudiante</th><th>Motivo</th><th>Fecha y hora</th><th>Respuesta</th><th>Contacto</th></tr></thead><tbody>${citations.map((citation) => { const student = studentById(citation.studentId); const guardian = guardianById(student?.guardianId); const wa = `https://wa.me/507${String(guardian?.whatsapp || "").replace(/\D/g, "")}?text=${encodeURIComponent(`EduControl · ${student?.name} · ${student?.idNumber} · ${D.classLabel(data, student?.classId)}. Citación: ${citation.title}`)}`; return `<tr><td><strong>${esc(student?.name)}</strong><div class="muted small-text">${esc(D.classLabel(data, student?.classId))}</div></td><td>${esc(citation.title)}<div class="muted small-text">${esc(citation.reason)}</div></td><td>${formatDate(citation.date)} · ${citation.time}</td><td>${citation.status === "PENDING" ? statusPill("PENDING") : `<span class="pill ${citation.response === "YES" ? "success" : "danger"}">${citation.response === "YES" ? "Sí asistirá" : "No podrá asistir"}</span><div class="muted small-text">${formatDate(citation.responseAt, true)}</div>`}</td><td><div class="list-actions"><a class="button ghost small" href="${attr(wa)}" target="_blank" rel="noopener">${icon("phone")} WhatsApp</a><button class="button ghost small danger-text" data-action="delete-citation" data-id="${citation.id}">${icon("trash")}</button></div></td></tr>`; }).join("")}</tbody></table></div></div></section>`;
   }
 
-  function renderClassroom() {
+  function renderClassroomLegacy() {
     const teacher = teacherById(state.session.actorId);
     const schoolClass = classById(teacher?.counselorClassId);
     if (!schoolClass) return `${pageHead("Profesor consejero", "Crea tu salón", "Configura el aula desde cero y luego registra estudiantes y acudientes.", "")}<section class="empty-state-action">${icon("school")}<h3>Tu salón todavía no está configurado</h3><p>El asistente te pedirá grado, sección, turno, aula y una fotografía opcional.</p><button class="button" data-action="counselor-create-class">${icon("plus")} Crear mi salón desde cero</button></section>`;
     const students = data.students.filter((item) => item.classId === schoolClass.id && item.active);
     return `${pageHead("Profesor consejero", "Mi salón", `${D.classLabel(data, schoolClass.id)} · ${schoolClass.level} · ${students.length} estudiantes`, `<button class="button secondary" data-action="set-view" data-view="invitations">${icon("send")} Invitar acudientes</button><button class="button" data-action="new-student" data-class="${schoolClass.id}">${icon("plus")} Agregar estudiante</button>`)}${schoolClass.image ? `<section class="classroom-cover" style="background-image:linear-gradient(90deg,rgba(8,39,65,.86),rgba(8,39,65,.32)),url('${attr(schoolClass.image)}')"><div><span>MI SALÓN</span><h3>${esc(D.classLabel(data, schoolClass.id))}</h3><p>${esc(schoolClass.room)} · ${esc(schoolClass.shift)}</p></div><button class="button ghost" data-action="edit-class" data-id="${schoolClass.id}">${icon("camera")} Cambiar datos o foto</button></section>` : ""}<section class="metrics">${metric("Estudiantes", students.length, "Matrícula activa", "student", "", "#student-list")}${metric("Materias", data.assignments.filter((item) => item.classId === schoolClass.id && item.active).length, "Plan académico", "book", "teal", "activities")}${metric("Ausencias", data.attendance.filter((item) => item.classId === schoolClass.id && item.status === "ABSENT").length, "Por revisar", "alert", "red", "attendance")}${metric("Justificaciones", data.justifications.filter((item) => students.some((student) => student.id === item.studentId) && item.status === "PENDING").length, "Pendientes de recibir", "shield", "amber", "justifications")}</section><section class="card" id="student-list"><div class="card-head"><div><h3>Estudiantes y acudientes</h3><p>Cada fila permite editar, invitar o remover conservando el historial.</p></div></div><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Estudiante</th><th>Acudiente</th><th>Invitación</th><th>Asistencia reciente</th><th>Acciones</th></tr></thead><tbody>${students.map((student) => { const recent = data.attendance.filter((item) => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date))[0]; const guardian = guardianById(student.guardianId); const invitation = data.invitations.find((item) => item.guardianId === student.guardianId && item.classId === schoolClass.id); return `<tr><td><div class="row">${avatarMarkup(student)}<div><strong>${esc(student.name)}</strong><div class="muted small-text">${student.gender === "F" ? "Femenino" : "Masculino"}</div></div></div></td><td>${guardian ? `<div class="row">${avatarMarkup(guardian)}<div><strong>${esc(guardian.name)}</strong><div class="muted small-text">${esc(guardian.email)}</div></div></div>` : "Sin acudiente"}</td><td>${invitation ? statusPill(invitation.status) : `<span class="pill warning">No preparada</span>`}</td><td>${recent ? `${statusPill(recent.status)} <span class="muted small-text">${formatDate(recent.date)}</span>` : "—"}</td><td><div class="list-actions"><button class="button secondary small" data-action="prepare-invitation" data-guardian="${student.guardianId}" data-class="${schoolClass.id}">${icon("send")} Invitar</button><button class="button ghost small" data-action="edit-student" data-id="${student.id}">${icon("edit")} Editar</button><button class="button ghost small" data-action="delete-student" data-id="${student.id}">${icon("trash")}</button></div></td></tr>`; }).join("")}</tbody></table></div></div></section>`;
+  }
+
+  function counselorStudentState(student) {
+    const absences = data.attendance.filter((item) => item.studentId === student.id && item.status === "ABSENT").length;
+    const urgent = data.observations.some((item) => item.studentId === student.id && ["IMPORTANT", "URGENT"].includes(item.kind));
+    const overdue = data.activities.some((activity) => activity.classId === student.classId && activity.dueDate < D.dateIso(0) && activity.grades.some((grade) => grade.studentId === student.id && grade.delivery === "NOT_DELIVERED"));
+    if (urgent || absences >= 2) return ["Requiere atención", "danger"];
+    if (overdue || absences) return ["Revisar", "warning"];
+    return ["Al día", "success"];
+  }
+
+  function renderClassroom() {
+    const teacher = teacherById(state.session.actorId); const schoolClass = classById(teacher?.counselorClassId);
+    if (!schoolClass) return `${pageHead("Profesor consejero", "Crea tu único salón", "El salón que crees será tu salón de consejería durante este año lectivo.", "")}<section class="empty-state-action">${icon("school")}<h3>Tu salón todavía no está configurado</h3><p>Después podrás registrar estudiantes y vincular acudientes existentes.</p><button class="button" data-action="counselor-create-class">${icon("plus")} Crear mi salón desde cero</button></section>`;
+    const query = D.normalize(state.filters.counselorStudentSearch || "");
+    const students = data.students.filter((item) => item.classId === schoolClass.id && item.active && D.normalize(`${item.name} ${guardianById(item.guardianId)?.name || ""}`).includes(query));
+    const allStudents = data.students.filter((item) => item.classId === schoolClass.id && item.active);
+    return `${pageHead("Profesor consejero", "Mi salón", `${D.classLabel(data, schoolClass.id)} · único salón de consejería · ${allStudents.length} estudiantes`, `<button class="button ghost" data-action="edit-class" data-id="${schoolClass.id}">${icon("edit")} Datos del salón</button><button class="button secondary" data-action="set-view" data-view="invitations">${icon("send")} Invitaciones</button><button class="button" data-action="new-student" data-class="${schoolClass.id}">${icon("plus")} Agregar estudiante</button>`)}<section class="metrics">${metric("Estudiantes", allStudents.length, "Matrícula activa", "student", "", "#student-list")}${metric("Al día", allStudents.filter((item) => counselorStudentState(item)[0] === "Al día").length, "Sin alertas actuales", "check", "teal", "#student-list")}${metric("Por revisar", allStudents.filter((item) => counselorStudentState(item)[0] === "Revisar").length, "Seguimiento preventivo", "clock", "amber", "#student-list")}${metric("Atención", allStudents.filter((item) => counselorStudentState(item)[0] === "Requiere atención").length, "No es un ranking", "alert", "red", "#student-list")}</section><div class="toolbar"><label class="field"><span>Buscar en mi salón</span><input class="input" data-filter="counselorStudentSearch" value="${attr(state.filters.counselorStudentSearch || "")}" placeholder="Estudiante o acudiente"></label><span class="pill info">El consejero ve el avance completo solo de este salón</span></div><section class="card" id="student-list"><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Estudiante</th><th>Acudiente</th><th>Estado general</th><th>Asistencia reciente</th><th>Acciones</th></tr></thead><tbody>${students.map((student) => { const recent = data.attendance.filter((item) => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date))[0]; const guardian = guardianById(student.guardianId); const studentState = counselorStudentState(student); return `<tr><td><div class="row">${avatarMarkup(student)}<div><strong>${esc(student.name)}</strong><div class="muted small-text">${student.gender === "F" ? "Femenino" : "Masculino"}</div></div></div></td><td>${guardian ? `<div class="row">${avatarMarkup(guardian)}<div><strong>${esc(guardian.name)}</strong><div class="muted small-text">${esc(guardian.phone)}</div></div></div>` : `<span class="pill warning">Sin acudiente vinculado</span>`}</td><td><span class="pill ${studentState[1]}">${studentState[0]}</span></td><td>${recent ? `${statusPill(recent.status)} <span class="muted small-text">${formatDate(recent.date)}</span>` : "—"}</td><td><div class="list-actions">${guardian ? `<button class="button secondary small" data-action="prepare-invitation" data-guardian="${guardian.id}" data-class="${schoolClass.id}">${icon("send")} Invitar</button>` : ""}<button class="button ghost small" data-action="edit-student" data-id="${student.id}">${icon("edit")} Editar</button><button class="button ghost small danger-text" data-action="delete-student" data-id="${student.id}">${icon("trash")}</button></div></td></tr>`; }).join("")}</tbody></table></div>${!students.length ? empty("Sin resultados", "Cambia la búsqueda o agrega el primer estudiante.") : ""}</div></section>`;
   }
 
   function renderInvitations() {
@@ -510,18 +603,22 @@
     if (!state.selectedStudentId || !students.some((item) => item.id === state.selectedStudentId)) state.selectedStudentId = students[0]?.id || null;
     return studentById(state.selectedStudentId);
   }
+  function guardianCanSeeActivity(activity) {
+    const plan = activity.planStatus || (activity.status === "PUBLISHED" ? "PUBLISHED" : "DRAFT");
+    return activity.active !== false && ["PUBLISHED", "CLOSED"].includes(plan);
+  }
 
   function renderGuardian() {
     const student = selectedGuardianStudent();
     const guardian = guardianById(state.session.actorId);
     const hasOrigin = state.session.adminOrigin;
     const nav = [["dashboard", "Inicio"], ["subjects", "Materias"], ["schedule", "Horario"], ["attendance", "Asistencia"], ["notifications", "Notificaciones"], ["profile", "Perfil"]];
-    const content = student ? renderGuardianView(student) : `<section class="card"><div class="card-body">${empty("Sin estudiantes vinculados", "Use Agregar estudiante en el perfil para iniciar una solicitud de vinculación.")}</div></section>`;
+    const content = student ? renderGuardianView(student) : `${pageHead("Cuenta del acudiente", "Vincula tu primer estudiante", "El estudiante debe haber sido registrado previamente por el consejero de su salón.", `<button class="button ghost" data-action="edit-profile">${icon("edit")} Editar perfil</button><button class="button" data-action="link-student">${icon("plus")} Agregar estudiante</button>`)}<section class="empty-state-action">${icon("student")}<h3>Aún no tienes estudiantes vinculados</h3><p>Introduce nombre, grado y cédula. La cédula confirma la coincidencia; si hay diferencias, el caso pasa a revisión.</p><button class="button" data-action="link-student">Buscar estudiante registrado</button></section>`;
     app.innerHTML = `<div class="app-shell ${hasOrigin ? "has-admin-return" : ""}">${hasOrigin ? `<div class="admin-return"><button data-action="back-admin">${icon("arrow")} Volver al Administrador</button><span>Probando como acudiente: ${esc(guardian?.name)}</span></div>` : ""}<div class="mobile-overlay" data-action="close-menu"></div><aside class="sidebar"><div class="brand">${brandMark()}<div><strong>EduControl <span class="version-tag">v${D.APP_VERSION}</span></strong><span>${esc(data.institution.name)}</span></div></div><nav class="nav-group"><span class="nav-label">Acudiente</span>${nav.map(([view, label]) => `<button class="nav-item ${state.view === view ? "active" : ""}" data-action="set-view" data-view="${view}">${icon(({ dashboard: "home", subjects: "book", schedule: "calendar", attendance: "check", notifications: "bell", profile: "student" })[view])}<span>${label}</span></button>`).join("")}</nav><div class="sidebar-foot"><div class="actor-card">${avatarMarkup(guardian)}<span><strong>${esc(guardian?.name)}</strong><small>Acudiente</small></span></div><button class="logout-button" data-action="logout">Cerrar sesión de prueba</button></div></aside><main class="main"><header class="topbar"><div class="row"><button class="button ghost icon-only menu-button" data-action="toggle-menu">${icon("menu")}</button><div><h1>${esc(nav.find((item) => item[0] === state.view)?.[1] || "Inicio")}</h1><p>Año lectivo ${data.institution.activeYear} · Información del estudiante seleccionado</p></div></div><div class="top-actions"><button class="button ghost hide-mobile" data-action="install-app" ${deferredInstallPrompt ? "" : "disabled"}>Instalar app</button></div></header><div class="content">${student ? `<section class="guardian-hero"><div class="student-identity">${avatarMarkup(student, "hero-avatar")}<div><h2>${esc(student.name)}</h2><p>${esc(D.classLabel(data, student.classId))} · ${esc(classById(student.classId)?.level)}</p></div></div><select class="select" data-state="selectedStudentId" aria-label="Cambiar estudiante">${guardianStudents().map((item) => option(item.id, `${item.name} — ${D.classLabel(data, item.classId)}`, student.id)).join("")}</select></section>` : ""}<nav class="guardian-nav" aria-label="Navegación del acudiente">${nav.map(([view, label]) => `<button class="${state.view === view ? "active" : ""}" data-action="set-view" data-view="${view}">${label}</button>`).join("")}</nav>${content}</div></main></div>`;
   }
 
   function guardianSubjectStats(student, assignment) {
-    const activities = data.activities.filter((item) => item.assignmentId === assignment.id && item.active !== false);
+    const activities = data.activities.filter((item) => item.assignmentId === assignment.id && guardianCanSeeActivity(item));
     const published = activities.filter((item) => item.status === "PUBLISHED" && item.grades.some((grade) => grade.studentId === student.id && grade.finalGrade != null));
     const performed = published.reduce((sum, item) => sum + Number(item.weight), 0);
     const achieved = published.reduce((sum, item) => {
@@ -554,13 +651,13 @@
     const recentAttendance = data.attendance.filter((item) => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date));
     const newestStatus = recentAttendance[0]?.status || "UNMARKED";
     const assignments = data.assignments.filter((item) => item.classId === student.classId && item.active);
-    const publishedActivities = data.activities.filter((item) => item.active !== false && assignments.some((assignment) => assignment.id === item.assignmentId) && item.status === "PUBLISHED" && item.grades.some((grade) => grade.studentId === student.id));
-    const pendingTasks = data.activities.filter((item) => item.active !== false && assignments.some((assignment) => assignment.id === item.assignmentId) && item.grades.some((grade) => grade.studentId === student.id && ["PENDING", "NOT_DELIVERED"].includes(grade.delivery)) && item.dueDate >= D.dateIso(0));
-    const overdue = data.activities.filter((item) => item.active !== false && assignments.some((assignment) => assignment.id === item.assignmentId) && item.grades.some((grade) => grade.studentId === student.id && grade.delivery === "NOT_DELIVERED") && item.dueDate < D.dateIso(0));
+    const publishedActivities = data.activities.filter((item) => guardianCanSeeActivity(item) && assignments.some((assignment) => assignment.id === item.assignmentId) && item.status === "PUBLISHED" && item.grades.some((grade) => grade.studentId === student.id));
+    const pendingTasks = data.activities.filter((item) => guardianCanSeeActivity(item) && assignments.some((assignment) => assignment.id === item.assignmentId) && item.grades.some((grade) => grade.studentId === student.id && ["PENDING", "NOT_DELIVERED"].includes(grade.delivery)) && item.dueDate >= D.dateIso(0));
+    const overdue = data.activities.filter((item) => guardianCanSeeActivity(item) && assignments.some((assignment) => assignment.id === item.assignmentId) && item.grades.some((grade) => grade.studentId === student.id && grade.delivery === "NOT_DELIVERED") && item.dueDate < D.dateIso(0)).slice(0, 3);
     const citations = data.citations.filter((item) => item.studentId === student.id && item.status === "PENDING");
     const auths = data.authorizations.filter((item) => item.studentId === student.id && !item.response);
-    const upcoming = data.activities.filter((item) => item.active !== false && assignments.some((assignment) => assignment.id === item.assignmentId) && item.dueDate >= D.dateIso(0)).sort((a, b) => a.dueDate.localeCompare(b.dueDate)).slice(0, 5);
-    const attention = data.observations.filter((item) => item.studentId === student.id && ["IMPORTANT", "URGENT"].includes(item.kind));
+    const upcoming = data.activities.filter((item) => guardianCanSeeActivity(item) && assignments.some((assignment) => assignment.id === item.assignmentId) && item.dueDate >= D.dateIso(0)).sort((a, b) => a.dueDate.localeCompare(b.dueDate)).slice(0, 3);
+    const attention = data.observations.filter((item) => item.studentId === student.id && ["IMPORTANT", "URGENT"].includes(item.kind)).slice(0, 3);
     const todaySlots = data.schedule.filter((item) => item.classId === student.classId && item.day === currentDayName() && item.kind === "CLASS" && item.active);
     const lastEnd = todaySlots.sort((a, b) => b.end.localeCompare(a.end))[0]?.end;
     const readyAt = lastEnd ? clockMinutes(lastEnd) + Number(data.institution.dailySummaryDelayMinutes || 60) : null;
@@ -580,12 +677,35 @@
     return `${pageHead("Seguimiento académico", "Materias", "Resultados comprensibles, sin proyecciones de notas futuras.", "")}<div class="subject-grid">${assignments.map((assignment) => { const stats = guardianSubjectStats(student, assignment); return `<button class="subject-card" data-action="open-guardian-subject" data-id="${assignment.id}" style="text-align:left"><div class="subject-accent" style="background:${assignment.color}"></div><h3>${esc(assignment.name)}</h3><p>${esc(teacherById(assignment.teacherId)?.name)}</p><div class="subject-stats"><div class="subject-stat"><small>Promedio actual</small><strong>${stats.performed ? D.oneDecimal(stats.average).toFixed(1) : "—"}</strong></div><div class="subject-stat"><small>Evaluado</small><strong>${D.oneDecimal(stats.performed)}%</strong></div><div class="subject-stat"><small>Conseguido</small><strong>${D.oneDecimal(stats.achieved)}%</strong></div><div class="subject-stat"><small>Exoneración</small><strong>${stats.eligible ? "Elegible" : assignment.exemptionEnabled ? "En proceso" : "No aplica"}</strong></div></div></button>`; }).join("")}</div>`;
   }
 
-  function renderGuardianSchedule(student) {
+  function renderGuardianScheduleLegacy(student) {
     const assignments = data.assignments.filter((item) => item.classId === student.classId && item.active);
     const slots = data.schedule.filter((item) => item.classId === student.classId && item.active);
     const scheduled = new Set(slots.filter((item) => item.kind === "CLASS").map((item) => item.assignmentId));
     const missing = assignments.filter((item) => !scheduled.has(item.id));
     return `${pageHead("Semana académica", "Horario consolidado", "Se forma automáticamente con las horas que cada profesor registra para este salón.", "")}${liveClassCard(slots, "guardian")}${missing.length ? `<div class="notice warning" style="margin-bottom:16px">Horario incompleto: faltan horas para ${missing.map((item) => item.name).join(", ")}.</div>` : `<div class="notice success" style="margin-bottom:16px">Horario completo: ${scheduled.size} materias con ${slots.filter((item) => item.kind === "CLASS").length} horas académicas semanales.</div>`}<section class="card"><div class="card-head"><div><h3>Semana de ${esc(student.name)}</h3><p>Toca cualquier materia para abrir sus actividades y calificaciones.</p></div></div><div class="card-body">${scheduleBoard(slots, false)}</div></section>`;
+  }
+
+  function guardianAttendanceBadge(record, date) {
+    if (date > D.dateIso(0)) return `<span class="attendance-chip future">Próxima</span>`;
+    if (!record) return `<span class="attendance-chip unmarked">Pendiente</span>`;
+    if (record.justificationPending) return `<span class="attendance-chip pending">Justificación pendiente</span>`;
+    const labels = { PRESENT: "Presente", LATE: `Tardanza${record.time ? ` ${record.time}` : ""}`, EARLY: `Retiro${record.time ? ` ${record.time}` : ""}`, ABSENT: "Ausente", JUSTIFIED: "Justificada", UNMARKED: "Pendiente" };
+    return `<span class="attendance-chip ${String(record.status).toLowerCase()}">${esc(labels[record.status] || record.status)}</span>`;
+  }
+
+  function renderGuardianSchedule(student) {
+    const assignments = data.assignments.filter((item) => item.classId === student.classId && item.active);
+    const slots = data.schedule.filter((item) => item.classId === student.classId && item.active);
+    const week = weekValue(state.guardianScheduleDate || D.dateIso(0)); const monday = mondayForWeek(week);
+    const scheduled = new Set(slots.filter((item) => item.kind === "CLASS").map((item) => item.assignmentId)); const missing = assignments.filter((item) => !scheduled.has(item.id));
+    const board = `<div class="schedule-board attendance-board">${D.DAYS.map((day, dayIndex) => { const date = addDays(monday, dayIndex); return `<div class="day-column ${date === D.dateIso(0) ? "today" : ""}"><div class="day-title">${day}<small>${formatDate(date)}</small></div>${slots.filter((item) => item.day === day && item.active).sort((a, b) => a.start.localeCompare(b.start)).map((slot) => { if (slot.kind === "BREAK") return `<div class="schedule-slot break"><strong>Recreo</strong><small>${slot.start}–${slot.end}</small></div>`; const assignment = assignmentById(slot.assignmentId); const record = data.attendance.find((item) => item.studentId === student.id && item.assignmentId === slot.assignmentId && item.date === date); return `<button class="schedule-slot attendance-slot" data-action="schedule-attendance-detail" data-id="${slot.id}" data-date="${date}" data-student="${student.id}"><span class="pill info">${slot.start}–${slot.end}</span><strong>${esc(assignment?.name || "Materia")}</strong><small>${esc(teacherById(assignment?.teacherId)?.name || "Profesor")} · ${esc(slot.room)}</small>${guardianAttendanceBadge(record, date)}</button>`; }).join("")}</div>`; }).join("")}</div>`;
+    return `${pageHead("Semana académica", "Horario y asistencia", "Cada bloque combina el horario subido por los profesores con la asistencia real del estudiante.", "")}<div class="toolbar"><label class="field"><span>Semana que deseas consultar</span><input class="input" type="week" data-state="guardianScheduleWeek" value="${week}"></label><span class="pill info">Toca una clase para ver el detalle</span></div>${liveClassCard(slots, "guardian")}${missing.length ? `<div class="notice warning" style="margin-bottom:16px">Horario incompleto: faltan horas para ${missing.map((item) => item.name).join(", ")}.</div>` : ""}<section class="card"><div class="card-head"><div><h3>Semana de ${esc(student.name)}</h3><p>Presente verde · tardanza ámbar · retiro naranja · ausencia roja · justificada azul.</p></div></div><div class="card-body">${board}</div></section>`;
+  }
+
+  function openScheduleAttendanceDetail(slotId, date, studentId) {
+    const slot = data.schedule.find((item) => item.id === slotId); const assignment = assignmentById(slot?.assignmentId); const record = data.attendance.find((item) => item.studentId === studentId && item.assignmentId === slot?.assignmentId && item.date === date);
+    const detail = record ? `${statusPill(record.status)}${record.time ? `<span class="pill info">Hora ${record.time}</span>` : ""}${record.justificationPending ? `<span class="pill warning">Documento pendiente de recibir</span>` : ""}${record.validatedBy ? `<div class="notice success">Validada por ${esc(D.personName(data, record.validatedBy))} el ${formatDate(record.validatedAt, true)}.</div>` : ""}` : date > D.dateIso(0) ? `<span class="pill info">Clase futura</span>` : `<span class="pill info">El profesor aún no ha registrado esta clase.</span>`;
+    showModal(`${assignment?.name || "Clase"} · ${formatDate(date)}`, `<div class="class-detail"><div class="row between"><div><h3>${esc(D.classLabel(data, slot?.classId))}</h3><p>${slot?.start}–${slot?.end} · ${esc(slot?.room || "")}</p></div>${guardianAttendanceBadge(record, date)}</div><div class="list"><div class="list-row"><span>Profesor</span><strong>${esc(teacherById(assignment?.teacherId)?.name || "—")}</strong></div><div class="list-row"><span>Materia</span><strong>${esc(assignment?.name || "—")}</strong></div><div class="list-row"><span>Estado</span><div class="list-actions">${detail}</div></div></div></div>`, "", null);
   }
 
   function renderGuardianAttendance(student) {
@@ -607,18 +727,26 @@
     return `${pageHead("Cuenta del acudiente", "Perfil y privacidad", "Cada campo adicional tiene una configuración independiente y reversible.", `<button class="button" data-action="edit-profile">${icon("edit")} Editar perfil</button><button class="button secondary" data-action="link-student">${icon("plus")} Agregar estudiante</button>`)}<div class="grid-2"><section class="card"><div class="card-head"><div><h3>Datos del acudiente</h3><p>Información visible para el colegio.</p></div></div><div class="card-body"><div class="row">${guardian.photo ? `<img class="profile-photo" src="${attr(guardian.photo)}" alt="Foto de ${attr(guardian.name)}">` : `<span class="avatar" style="width:62px;height:62px;font-size:1rem">${initials(guardian.name)}</span>`}<div><h3 style="margin:0">${esc(guardian.name)}</h3><p class="muted small-text">${esc(guardian.relationship)} · ${esc(guardian.residence || "Residencia no indicada")}</p></div></div><div class="list" style="margin-top:16px"><div class="list-row"><span>Teléfono</span><strong>${esc(guardian.phone)}</strong></div><div class="list-row"><span>WhatsApp</span><strong>${esc(guardian.whatsapp)}</strong></div><div class="list-row"><span>Correo</span><strong>${esc(guardian.email)}</strong></div></div><h3>Mis estudiantes</h3><div class="list">${children.map((item) => `<button class="list-row" data-action="select-child" data-id="${item.id}"><span class="list-row-main"><span class="avatar">${initials(item.name)}</span><span><strong>${esc(item.name)}</strong><small>${esc(D.classLabel(data, item.classId))}</small></span></span><span class="pill ${item.id === student.id ? "success" : "info"}">${item.id === student.id ? "Seleccionado" : "Ver"}</span></button>`).join("")}</div></div></section><section class="card"><div class="card-head"><div><h3>Controles de privacidad</h3><p>La cédula del estudiante nunca se muestra a otros acudientes.</p></div></div><div class="card-body">${Object.entries(guardian.privacy).map(([field, config]) => `<div class="privacy-row"><div><strong>${esc(({ phone: "Teléfono", whatsapp: "WhatsApp", email: "Correo", residence: "Residencia" })[field])}</strong><div class="muted small-text">Publicar: ${config.published ? "Sí" : "No"}</div></div><button class="switch ${config.published ? "on" : ""}" data-action="privacy-toggle" data-field="${field}" aria-label="Cambiar publicación"></button><select class="select" data-privacy-audience="${field}">${["Otros acudientes del mismo grupo", "Profesores autorizados", "Colegio solamente", "Nadie"].map((item) => option(item, item, config.audience)).join("")}</select></div>`).join("")}</div></section></div>`;
   }
 
+  function openViewAsLegacy(role = null) {
+    const selectedRole = role || "TEACHER";
+    const people = selectedRole === "TEACHER" ? data.teachers.filter((item) => item.active && item.role === "TEACHER") : selectedRole === "COUNSELOR" ? data.teachers.filter((item) => item.active && item.role === "COUNSELOR") : data.guardians.filter((item) => item.active);
+    showModal("Ver como", `<div class="toolbar"><button type="button" class="button ${selectedRole === "TEACHER" ? "" : "ghost"}" data-action="admin-view-role" data-role="TEACHER">Profesor</button><button type="button" class="button ${selectedRole === "COUNSELOR" ? "" : "ghost"}" data-action="admin-view-role" data-role="COUNSELOR">Consejero</button><button type="button" class="button ${selectedRole === "GUARDIAN" ? "" : "ghost"}" data-action="admin-view-role" data-role="GUARDIAN">Acudiente</button></div><div class="list">${people.map((person) => `<button type="button" class="list-row" data-action="impersonate" data-role="${selectedRole}" data-id="${person.id}"><span class="list-row-main"><span class="avatar">${initials(person.name)}</span><span><strong>${esc(person.name)}</strong><small>${selectedRole === "GUARDIAN" ? `${data.students.filter((item) => item.guardianId === person.id).length} estudiante(s)` : selectedRole === "COUNSELOR" ? `Consejero ${D.classLabel(data, person.counselorClassId)}` : person.specialty}</small></span></span><span class="pill info">Entrar</span></button>`).join("")}</div>`, "", null);
+  }
+
   function openViewAs(role = null) {
     const selectedRole = role || "TEACHER";
-    const people = selectedRole === "TEACHER" ? data.teachers.filter((item) => item.active) : selectedRole === "COUNSELOR" ? data.teachers.filter((item) => item.active && item.counselorClassId) : data.guardians.filter((item) => item.active);
-    showModal("Ver como", `<div class="toolbar"><button type="button" class="button ${selectedRole === "TEACHER" ? "" : "ghost"}" data-action="admin-view-role" data-role="TEACHER">Profesor</button><button type="button" class="button ${selectedRole === "COUNSELOR" ? "" : "ghost"}" data-action="admin-view-role" data-role="COUNSELOR">Consejero</button><button type="button" class="button ${selectedRole === "GUARDIAN" ? "" : "ghost"}" data-action="admin-view-role" data-role="GUARDIAN">Acudiente</button></div><div class="list">${people.map((person) => `<button type="button" class="list-row" data-action="impersonate" data-role="${selectedRole}" data-id="${person.id}"><span class="list-row-main"><span class="avatar">${initials(person.name)}</span><span><strong>${esc(person.name)}</strong><small>${selectedRole === "GUARDIAN" ? `${data.students.filter((item) => item.guardianId === person.id).length} estudiante(s)` : selectedRole === "COUNSELOR" ? `Consejero ${D.classLabel(data, person.counselorClassId)}` : person.specialty}</small></span></span><span class="pill info">Entrar</span></button>`).join("")}</div>`, "", null);
+    const people = selectedRole === "TEACHER" ? data.teachers.filter((item) => item.active && item.role === "TEACHER") : selectedRole === "COUNSELOR" ? data.teachers.filter((item) => item.active && item.role === "COUNSELOR") : data.guardians.filter((item) => item.active);
+    showModal("Ver como", `<div class="toolbar"><button type="button" class="button ${selectedRole === "TEACHER" ? "" : "ghost"}" data-action="admin-view-role" data-role="TEACHER">Profesor</button><button type="button" class="button ${selectedRole === "COUNSELOR" ? "" : "ghost"}" data-action="admin-view-role" data-role="COUNSELOR">Consejero</button><button type="button" class="button ${selectedRole === "GUARDIAN" ? "" : "ghost"}" data-action="admin-view-role" data-role="GUARDIAN">Acudiente</button></div><label class="field"><span>Buscar perfil</span><input class="input" data-list-search placeholder="Nombre, materia o correo"></label><div class="list searchable-list">${people.map((person) => { const note = selectedRole === "GUARDIAN" ? `${data.students.filter((item) => item.guardianId === person.id).length} estudiante(s)` : selectedRole === "COUNSELOR" ? `${person.specialty} · ${person.counselorClassId ? D.classLabel(data, person.counselorClassId) : "salón por crear"}` : person.specialty; return `<button type="button" class="list-row interactive-row" data-search-text="${attr(`${person.name} ${person.email} ${note}`)}" data-action="impersonate" data-role="${selectedRole}" data-id="${person.id}"><span class="list-row-main">${avatarMarkup(person)}<span><strong>${esc(person.name)}</strong><small>${esc(note)}</small></span></span><span class="pill info">Entrar →</span></button>`; }).join("")}</div>`, "", null);
   }
 
   function openClassroomWizard() {
     const teacher = teacherById(state.session.actorId);
+    if (!teacher || teacher.role !== "COUNSELOR") return toast("Solo una cuenta registrada como consejero puede crear un salón.", "error");
+    if (teacher.counselorClassId && classById(teacher.counselorClassId)?.active) return toast("Ya tienes un salón de consejería. Cada consejero administra únicamente uno.", "error");
     showModal("Crear mi salón desde cero", `${formSteps(["Aula", "Imagen", "Estudiantes", "Invitaciones"], 2)}<div class="form-grid"><label class="field"><span>Grado</span><input class="input" name="grade" placeholder="Ej. 8.º" required></label><label class="field"><span>Sección</span><input class="input" name="section" placeholder="A" maxlength="3" required></label><label class="field"><span>Nivel</span><select class="select" name="level">${["Primaria", "Premedia", "Media"].map((value) => option(value, value, "Premedia")).join("")}</select></label><label class="field"><span>Turno</span><select class="select" name="shift">${["Matutino", "Vespertino"].map((value) => option(value, value, "Matutino")).join("")}</select></label><label class="field wide"><span>Nombre o número del aula</span><input class="input" name="room" placeholder="Ej. Aula 8A" required></label>${photoPicker("", "Fotografía del salón (opcional)")}<div class="notice success wide">Después de guardar podrás agregar estudiantes uno por uno y preparar invitaciones para sus acudientes.</div></div>`, "Crear salón", (form) => {
       const grade = form.get("grade").trim(); const section = form.get("section").trim().toUpperCase();
       if (data.classes.some((item) => item.active && D.normalize(item.grade) === D.normalize(grade) && D.normalize(item.section) === D.normalize(section))) return showFormError("Ya existe un salón con ese grado y sección."), false;
-      const schoolClass = { id: D.uid("c"), grade, section, level: form.get("level"), shift: form.get("shift"), room: form.get("room").trim(), counselorId: teacher.id, image: "", active: true };
+      const schoolClass = { id: D.uid("c"), grade, section, level: form.get("level"), shift: form.get("shift"), room: form.get("room").trim(), counselorId: teacher.id, createdByCounselorId: teacher.id, image: "", active: true };
       data.classes.push(schoolClass); teacher.counselorClassId = schoolClass.id;
       const photo = form.get("photo");
       const finish = (value) => { if (value) schoolClass.image = value; D.addAudit(data, teacher.id, "CREÓ SU SALÓN", `${grade} ${section} · ${schoolClass.room}`, "IMPORTANT"); persist("Salón creado. Ahora puedes agregar estudiantes e invitar acudientes."); render(); };
@@ -681,7 +809,7 @@
     });
   }
 
-  function openStudentForm(id = null, forcedClassId = null) {
+  function openStudentFormLegacy(id = null, forcedClassId = null) {
     const item = data.students.find((student) => student.id === id) || {};
     showModal(`${id ? "Editar" : "Crear"} estudiante`, `${formSteps(["Foto", "Identidad", "Salón", "Acudiente"], 4)}<div class="form-grid">${photoPicker(item.photo || "", "Fotografía del estudiante (opcional)")}<label class="field wide"><span>Nombre completo</span><input class="input" name="name" value="${attr(item.name || "")}" required></label><label class="field"><span>Género</span><select class="select" name="gender">${option("F", "Femenino", item.gender)}${option("M", "Masculino", item.gender)}</select></label><label class="field"><span>Fecha de nacimiento</span><input class="input" type="date" name="birthDate" value="${attr(item.birthDate || "")}" required></label><label class="field"><span>Tipo de identificación</span><select class="select" name="idType">${option("Cédula", "Cédula", item.idType)}${option("Pasaporte", "Pasaporte", item.idType)}</select></label><label class="field"><span>Cédula o pasaporte</span><input class="input" name="idNumber" value="${attr(item.idNumber || "")}" required></label><label class="field"><span>Salón</span><select class="select" name="classId" required>${data.classes.filter((entry) => entry.active).map((entry) => option(entry.id, D.classLabel(data, entry.id), item.classId || forcedClassId)).join("")}</select></label><label class="field"><span>Acudiente principal</span><select class="select" name="guardianId" required>${data.guardians.filter((entry) => entry.active).map((entry) => option(entry.id, entry.name, item.guardianId)).join("")}</select></label><div class="notice wide">La identificación es privada y se utiliza como comprobación definitiva de vinculación.</div></div>`, "Guardar estudiante", (form) => {
       const name = form.get("name").trim(); const idNumber = form.get("idNumber").trim();
@@ -696,12 +824,38 @@
     });
   }
 
+  function openStudentForm(id = null, forcedClassId = null) {
+    const item = data.students.find((student) => student.id === id) || {};
+    const counselor = state.session.role === "COUNSELOR" ? teacherById(state.session.actorId) : null;
+    if (!id && !counselor) return toast("Los estudiantes nuevos se registran desde Mi salón por su consejero.", "error");
+    const classId = counselor?.counselorClassId || forcedClassId || item.classId;
+    if (!id && !classId) return toast("Primero crea tu salón de consejería.", "error");
+    const classChoices = counselor ? data.classes.filter((entry) => entry.id === counselor.counselorClassId) : data.classes.filter((entry) => entry.active);
+    showModal(`${id ? "Editar" : "Crear"} estudiante`, `${formSteps(["Foto", "Identidad", "Salón", "Vinculación"], 4)}<div class="form-grid">${photoPicker(item.photo || "", "Fotografía del estudiante (opcional)")}<label class="field wide"><span>Nombre completo</span><input class="input" name="name" value="${attr(item.name || "")}" required></label><label class="field"><span>Género</span><select class="select" name="gender">${option("F", "Femenino", item.gender)}${option("M", "Masculino", item.gender)}</select></label><label class="field"><span>Fecha de nacimiento</span><input class="input" type="date" name="birthDate" value="${attr(item.birthDate || "")}" required></label><label class="field"><span>Tipo de identificación</span><select class="select" name="idType">${option("Cédula", "Cédula", item.idType)}${option("Pasaporte", "Pasaporte", item.idType)}</select></label><label class="field"><span>Cédula o pasaporte</span><input class="input" name="idNumber" value="${attr(item.idNumber || "")}" required></label><label class="field"><span>Salón</span><select class="select" name="classId" ${counselor ? "disabled" : ""}>${classChoices.map((entry) => option(entry.id, D.classLabel(data, entry.id), classId)).join("")}</select></label><label class="field wide"><span>Acudiente principal existente (opcional)</span><select class="select" name="guardianId">${option("", "Sin vincular todavía", item.guardianId || "")}${data.guardians.filter((entry) => entry.active).map((entry) => option(entry.id, `${entry.name} · ${entry.phone}`, item.guardianId)).join("")}</select><span class="hint">Si el acudiente ya tiene otro hijo, selecciónalo aquí. Si aún no tiene cuenta, podrá crearla y vincularse con la cédula.</span></label><div class="notice wide">La identificación nunca se muestra públicamente. Solo el consejero de este salón y la administración pueden corregir la ficha académica.</div></div>`, "Guardar estudiante", (form) => {
+      const name = form.get("name").trim(); const idNumber = form.get("idNumber").trim();
+      if (data.students.some((student) => student.id !== id && D.normalize(student.idNumber) === D.normalize(idNumber))) return showFormError("Ya existe un estudiante con esta identificación."), false;
+      const values = { name, gender: form.get("gender"), birthDate: form.get("birthDate"), idType: form.get("idType"), idNumber, classId: counselor?.counselorClassId || form.get("classId"), guardianId: form.get("guardianId") || null, active: true };
+      let record = item;
+      if (id) Object.assign(record, values); else { record = { id: D.uid("s"), ...values, photo: "" }; data.students.push(record); }
+      const photo = form.get("photo");
+      const finish = (value) => { if (value) record.photo = value; D.addAudit(data, state.session.actorId, id ? "MODIFICÓ ESTUDIANTE" : "CREÓ ESTUDIANTE", `${name} · ${D.classLabel(data, values.classId)}`, "IMPORTANT"); persist(values.guardianId ? "Estudiante guardado y vinculado al acudiente existente." : "Estudiante guardado. El acudiente podrá vincularse después."); render(); };
+      if (photo && photo.size) saveCompressedPhoto(photo, finish); else finish(null);
+      return true;
+    });
+  }
+
   function openClassForm(id = null) {
     const item = data.classes.find((entry) => entry.id === id) || {};
     const counselorLocked = state.session.role === "COUNSELOR";
+    if (!id && !counselorLocked) return toast("Los salones nuevos los crea su profesor consejero desde Mi salón.", "error");
+    if (counselorLocked && id && teacherById(state.session.actorId)?.counselorClassId !== id) return toast("Solo puedes administrar tu único salón de consejería.", "error");
     showModal(`${id ? "Editar" : "Crear"} salón`, `${formSteps(["Aula", "Imagen", "Consejero"], 3)}<div class="form-grid">${photoPicker(item.image || "", "Fotografía del salón (opcional)")}<label class="field"><span>Grado</span><input class="input" name="grade" value="${attr(item.grade || "")}" placeholder="Ej. 8.º" required></label><label class="field"><span>Sección</span><input class="input" name="section" value="${attr(item.section || "")}" maxlength="3" required></label><label class="field"><span>Nivel</span><select class="select" name="level">${["Primaria", "Premedia", "Media"].map((value) => option(value, value, item.level)).join("")}</select></label><label class="field"><span>Turno</span><select class="select" name="shift">${["Matutino", "Vespertino"].map((value) => option(value, value, item.shift)).join("")}</select></label><label class="field"><span>Aula</span><input class="input" name="room" value="${attr(item.room || "")}" required></label><label class="field"><span>Profesor consejero</span><select class="select" name="counselorId" ${counselorLocked ? "disabled" : ""}>${data.teachers.filter((entry) => entry.active).map((entry) => option(entry.id, entry.name, counselorLocked ? state.session.actorId : item.counselorId)).join("")}</select></label></div>`, "Guardar salón", (form) => {
-      const values = { grade: form.get("grade"), section: form.get("section").toUpperCase(), level: form.get("level"), shift: form.get("shift"), room: form.get("room"), counselorId: counselorLocked ? state.session.actorId : form.get("counselorId") };
-      if (id) Object.assign(item, values); else { values.id = D.uid("c"); values.image = ""; values.active = true; data.classes.push(values); }
+      const values = { grade: form.get("grade"), section: form.get("section").toUpperCase(), level: form.get("level"), shift: form.get("shift"), room: form.get("room"), counselorId: counselorLocked ? state.session.actorId : form.get("counselorId"), createdByCounselorId: item.createdByCounselorId || (counselorLocked ? state.session.actorId : form.get("counselorId")) };
+      const chosenCounselor = teacherById(values.counselorId);
+      if (!chosenCounselor || chosenCounselor.role !== "COUNSELOR") return showFormError("El responsable debe tener un perfil exclusivo de profesor consejero."), false;
+      if (chosenCounselor.counselorClassId && chosenCounselor.counselorClassId !== id) return showFormError("Ese consejero ya administra otro salón este año."), false;
+      if (id) { const previousCounselor = teacherById(item.counselorId); if (previousCounselor && previousCounselor.id !== values.counselorId) previousCounselor.counselorClassId = null; Object.assign(item, values); }
+      else { values.id = D.uid("c"); values.image = ""; values.active = true; data.classes.push(values); }
       const counselor = teacherById(values.counselorId); if (counselor) counselor.counselorClassId = id || values.id;
       const record = id ? item : values; const photo = form.get("photo");
       const finish = (value) => { if (value) record.image = value; D.addAudit(data, state.session.actorId, id ? "MODIFICÓ SALÓN" : "CREÓ SALÓN", `${values.grade} ${values.section}`, "IMPORTANT"); persist("Salón guardado."); render(); };
@@ -725,7 +879,7 @@
     });
   }
 
-  function openScheduleForm(id = null, copyFrom = null) {
+  function openScheduleFormLegacy(id = null, copyFrom = null) {
     const source = copyFrom ? data.schedule.find((entry) => entry.id === copyFrom) : null;
     const item = data.schedule.find((entry) => entry.id === id) || (source ? { ...source, id: null } : {});
     const allowedAssignments = state.session.role === "ADMIN" ? data.assignments.filter((entry) => entry.active) : teacherAssignments();
@@ -747,7 +901,35 @@
     });
   }
 
-  function openActivityForm(id = null) {
+  function openScheduleForm(id = null, copyFrom = null) {
+    if (state.session.role === "ADMIN") return openScheduleFormLegacy(id, copyFrom);
+    const teacher = teacherById(state.session.actorId);
+    const source = data.schedule.find((entry) => entry.id === (copyFrom || id));
+    const currentAssignment = assignmentById(source?.assignmentId || state.selectedAssignmentId);
+    const catalogIds = [...new Set([teacher?.primarySubjectCatalogId, ...teacherAssignments().map((item) => item.catalogId)].filter(Boolean))];
+    const catalogs = data.subjectCatalog.filter((item) => item.active && catalogIds.includes(item.id));
+    if (!catalogs.length) return toast("Completa tu perfil y selecciona tu materia principal.", "error");
+    const selectedClassId = source?.classId || currentAssignment?.classId || data.classes.find((item) => item.active)?.id;
+    showModal(`${id ? "Editar" : "Agregar"} hora de clase`, `${formSteps(["Materia", "Salón", "Día", "Hora"], 4)}<div class="form-grid"><label class="field"><span>Mi materia</span><select class="select" name="catalogId">${catalogs.map((entry) => option(entry.id, entry.name, currentAssignment?.catalogId || teacher.primarySubjectCatalogId)).join("")}</select></label><label class="field"><span>Salón existente</span><select class="select" name="classId">${data.classes.filter((entry) => entry.active).map((entry) => option(entry.id, D.classLabel(data, entry.id), selectedClassId)).join("")}</select></label><label class="field"><span>Día</span><select class="select" name="day">${D.DAYS.map((day) => option(day, day, source?.day)).join("")}</select></label><label class="field"><span>Aula</span><input class="input" name="room" value="${attr(source?.room || classById(selectedClassId)?.room || "")}" required></label><label class="field"><span>Inicio</span><input class="input" type="time" name="start" value="${attr(source?.start || "07:00")}" required></label><label class="field"><span>Fin</span><input class="input" type="time" name="end" value="${attr(source?.end || "07:45")}" required></label><div class="notice success wide">Al guardar, la materia queda conectada con ese salón. Sus estudiantes aparecerán automáticamente y los acudientes verán esta hora en el horario consolidado.</div><div class="notice warning wide">Los cruces se avisan, pero se permite guardar para que la administración pueda resolverlos.</div>${id ? `<div class="wide list-actions left"><button type="button" class="button ghost" data-action="duplicate-schedule" data-id="${source.id}">${icon("copy")} Duplicar hora</button><button type="button" class="button ghost danger-text" data-action="delete-schedule" data-id="${source.id}">${icon("trash")} Eliminar hora</button></div>` : ""}</div>`, "Guardar horario", (form) => {
+      if (form.get("start") >= form.get("end")) return showFormError("La hora final debe ser posterior a la inicial."), false;
+      const catalog = data.subjectCatalog.find((entry) => entry.id === form.get("catalogId")); const classId = form.get("classId");
+      let assignment = data.assignments.find((entry) => entry.active && entry.classId === classId && entry.catalogId === catalog.id);
+      if (assignment && assignment.teacherId !== teacher.id) return showFormError(`Esta materia ya está a cargo de ${teacherById(assignment.teacherId)?.name}. La administración debe registrar un reemplazo para conservar el historial.`), false;
+      if (!assignment) {
+        assignment = { id: D.uid("as"), catalogId: catalog.id, name: catalog.name, classId, teacherId: teacher.id, color: "#2b73c2", attendanceWeight: 5, exemptionEnabled: true, exemptionAverage: 4.5, latePenalty: 0.5, trimester: data.institution.currentTrimester, active: true };
+        data.assignments.push(assignment);
+      }
+      const values = { assignmentId: assignment.id, classId, teacherId: teacher.id, day: form.get("day"), start: form.get("start"), end: form.get("end"), room: form.get("room"), kind: "CLASS", active: true };
+      const conflicts = data.schedule.filter((slot) => slot.id !== id && slot.active && slot.kind === "CLASS" && slot.day === values.day && slot.start < values.end && values.start < slot.end && (slot.teacherId === values.teacherId || slot.classId === values.classId));
+      if (id) Object.assign(source, values); else data.schedule.push({ id: D.uid("sch"), ...values });
+      D.addAudit(data, teacher.id, id ? "MODIFICÓ HORARIO" : "AGREGÓ HORARIO", `${assignment.name} · ${D.classLabel(data, classId)} · ${values.day} ${values.start}`, "IMPORTANT");
+      if (conflicts.length) { D.addNotification(data, "ADMIN", "admin", "SCHEDULE", "Conflicto de horario por revisar", `${values.day} ${values.start}: ${assignment.name} · ${D.classLabel(data, classId)}.`); persist("Horario guardado con alerta de conflicto.", "error"); }
+      else persist("Horario guardado y conectado con el salón.");
+      return true;
+    }, false);
+  }
+
+  function openActivityFormLegacy(id = null) {
     const assignment = id ? assignmentById(activityById(id)?.assignmentId) : selectedTeacherAssignment();
     const item = activityById(id) || {};
     if (!assignment) return toast("Seleccione una materia.", "error");
@@ -758,7 +940,11 @@
       const totalOther = data.activities.filter((entry) => entry.active !== false && entry.assignmentId === assignment.id && entry.id !== id).reduce((sum, entry) => sum + Number(entry.weight), 0);
       if (totalOther + weight > 95) return showFormError(`El esquema superaría 100% incluyendo la asistencia fija de 5%. Disponible: ${Math.max(0, 95 - totalOther)}%.`), false;
       if (form.get("maxDate") < form.get("dueDate")) return showFormError("La fecha máxima no puede ser anterior a la entrega."), false;
-      const values = { assignmentId: assignment.id, classId: assignment.classId, name: form.get("name").trim(), type, description: form.get("description").trim(), weight, dueDate: form.get("dueDate"), maxDate: form.get("maxDate"), isGroup: form.get("isGroup") === "on", latePolicy: "Penalización por cada día de clase de atraso.", latePenalty: Number(form.get("latePenalty")), maxExtensionDays: Number(form.get("maxExtensionDays")) };
+      const dueDay = currentDayName(new Date(`${form.get("dueDate")}T12:00:00`));
+      const dueSlots = data.schedule.filter((slot) => slot.active && slot.kind === "CLASS" && slot.assignmentId === assignment.id && slot.day === dueDay).sort((a, b) => a.start.localeCompare(b.start));
+      if (!dueSlots.length) return showFormError(`La materia no tiene clase el ${dueDay}. Elige uno de sus días de horario.`), false;
+      if (activityReservesCapacity(item) && workloadCount(assignment.classId, form.get("dueDate"), item.batchId) >= 4) return showFormError("Ese día ya tiene cuatro entregas para el salón. Elige otra clase."), false;
+      const values = { assignmentId: assignment.id, classId: assignment.classId, name: form.get("name").trim(), type, description: form.get("description").trim(), weight, dueDate: form.get("dueDate"), dueStart: dueSlots[0].start, dueEnd: dueSlots[dueSlots.length - 1].end, maxDate: form.get("maxDate"), isGroup: form.get("isGroup") === "on", latePolicy: "Penalización por cada día de clase de atraso.", latePenalty: Number(form.get("latePenalty")), maxExtensionDays: Number(form.get("maxExtensionDays")) };
       if (id) Object.assign(item, values);
       else {
         values.id = D.uid("act"); values.status = "DRAFT"; values.active = true; values.createdAt = D.nowIso(); values.publishedAt = null;
@@ -769,6 +955,76 @@
       D.addAudit(data, state.session.actorId, id ? "MODIFICÓ ACTIVIDAD" : "CREÓ ACTIVIDAD", `${values.name} · ${assignment.name} · ${D.classLabel(data, assignment.classId)}`, "IMPORTANT");
       persist("Actividad guardada y visible para los acudientes."); return true;
     }, false);
+  }
+
+  function plannerMeetings(assignment, week) {
+    const monday = mondayForWeek(week); const byDay = new Map();
+    data.schedule.filter((slot) => slot.active && slot.kind === "CLASS" && slot.assignmentId === assignment.id).forEach((slot) => {
+      const index = D.DAYS.indexOf(slot.day); if (index < 0) return;
+      const date = addDays(monday, index); const current = byDay.get(date);
+      if (!current) byDay.set(date, { date, day: slot.day, start: slot.start, end: slot.end });
+      else { current.start = current.start < slot.start ? current.start : slot.start; current.end = current.end > slot.end ? current.end : slot.end; }
+    });
+    return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  function plannerSectionsMarkup(catalogId, grade, week) {
+    const assignments = teacherAssignments().filter((item) => item.catalogId === catalogId && classById(item.classId)?.grade === grade);
+    if (!assignments.length) return `<div class="notice warning">No impartes esta materia en ningún salón de ${esc(grade)}.</div>`;
+    return `<div class="planner-sections">${assignments.map((assignment) => {
+      const meetings = plannerMeetings(assignment, week);
+      const hasCapacity = meetings.some((meeting) => workloadCount(assignment.classId, meeting.date) < 4);
+      const options = meetings.map((meeting) => { const count = workloadCount(assignment.classId, meeting.date); const full = count >= 4; const tone = count <= 2 ? "Disponible" : count === 3 ? "Último cupo" : "Completo"; return `<option value="${meeting.date}" ${full ? "disabled" : ""}>${meeting.day} ${formatDate(meeting.date)} · ${meeting.start}–${meeting.end} · ${count}/4 ${tone}</option>`; }).join("");
+      const capacityLegend = meetings.map((meeting) => { const count = workloadCount(assignment.classId, meeting.date); return `<span class="capacity-chip cap-${count >= 4 ? "full" : count === 3 ? "last" : "open"}">${meeting.day.slice(0, 3)} ${count}/4</span>`; }).join("");
+      return `<article class="planner-section ${!hasCapacity ? "full" : ""}"><label class="checkbox-row"><input type="checkbox" name="assignmentIds" value="${assignment.id}" ${hasCapacity ? "checked" : "disabled"}> <strong>${esc(D.classLabel(data, assignment.classId))}</strong></label>${options ? `<div class="capacity-row">${capacityLegend}</div><label class="field"><span>Clase de entrega · hora automática</span><select class="select" name="due__${assignment.id}" ${hasCapacity ? "" : "disabled"}>${options}</select></label>${!hasCapacity ? `<div class="notice danger">Todas las clases de esta semana ya tienen 4 entregas. Elige otra semana.</div>` : ""}` : `<div class="notice warning">Primero agrega una hora de esta materia al horario del salón.</div>`}</article>`;
+    }).join("")}</div>`;
+  }
+
+  function refreshActivityPlanner() {
+    const form = document.getElementById("modal-form"); const target = document.getElementById("planner-sections");
+    if (!form || !target) return;
+    target.innerHTML = plannerSectionsMarkup(form.elements.catalogId.value, form.elements.grade.value, form.elements.deliveryWeek.value);
+  }
+
+  function openActivityForm(id = null) {
+    if (id) return openActivityFormLegacy(id);
+    const current = selectedTeacherAssignment();
+    if (!current) return toast("Primero registra tu materia y una hora de clase en el horario.", "error");
+    const catalogs = [...new Map(teacherAssignments().map((item) => [item.catalogId, data.subjectCatalog.find((catalog) => catalog.id === item.catalogId) || { id: item.catalogId, name: item.name }])).values()];
+    const grades = [...new Set(teacherAssignments().filter((item) => item.catalogId === current.catalogId).map((item) => classById(item.classId)?.grade).filter(Boolean))];
+    const week = weekValue(addDays(D.dateIso(0), 7));
+    const publishDefault = new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+    showModal("Planificar actividad", `${formSteps(["Materia y grado", "Semana", "Salones", "Publicación"], 4)}<div class="form-grid"><label class="field"><span>Materia</span><select class="select" name="catalogId" data-planner-control>${catalogs.map((catalog) => option(catalog.id, catalog.name, current.catalogId)).join("")}</select></label><label class="field"><span>Grado</span><select class="select" name="grade" data-planner-control>${grades.map((grade) => option(grade, grade, classById(current.classId)?.grade)).join("")}</select></label><label class="field"><span>Semana de entrega</span><input class="input" type="week" name="deliveryWeek" data-planner-control value="${week}" required></label><label class="field"><span>Lugar de realización</span><select class="select" name="location">${option("En clase", "En clase", "")}${option("En casa", "En casa", "")}</select></label><label class="field wide"><span>Nombre de la actividad</span><input class="input" name="name" required placeholder="Ej. Taller de ecuaciones — semana 4"></label><label class="field"><span>Tipo</span><select class="select" name="type">${["Tarea", "Ejercicio", "Trabajo individual", "Trabajo grupal", "Proyecto", "Presentación", "Evaluación", "Examen final", "Laboratorio", "Otra actividad entregable"].map((value) => option(value, value, "Tarea")).join("")}</select></label><label class="field"><span>Peso (%)</span><input class="input" type="number" min="1" max="25" step="1" name="weight" value="10" required></label><label class="field wide"><span>Descripción e indicaciones</span><textarea class="textarea" name="description" required placeholder="Explica claramente qué deben realizar y entregar."></textarea></label><div class="wide"><div class="row between"><div><strong>Salones y clases disponibles</strong><div class="hint">Verde 0–2 · ámbar 3 · rojo 4/4. La hora se toma del horario docente.</div></div><span class="pill info">Máximo 4 entregas por día</span></div><div id="planner-sections">${plannerSectionsMarkup(current.catalogId, classById(current.classId)?.grade, week)}</div></div><label class="field"><span>Estado</span><select class="select" name="planStatus">${option("DRAFT", "Guardar borrador", "")}${option("SCHEDULED", "Programar publicación", "")}${option("PUBLISHED", "Publicar ahora", "")}</select></label><label class="field"><span>Fecha de publicación programada</span><input class="input" type="datetime-local" name="publishAt" value="${publishDefault}"><span class="hint">En esta PWA se activa al volver a abrirla; no simula push en segundo plano.</span></label><label class="field"><span>Penalización por día de clase</span><input class="input" type="number" min="0" max="2" step="0.1" name="latePenalty" value="${current.latePenalty ?? 0.5}"></label><label class="field"><span>Días máximos de prórroga</span><input class="input" type="number" min="0" max="20" name="maxExtensionDays" value="3"></label><div class="notice success wide">Escribes el contenido una sola vez. EduControl crea el seguimiento separado para cada sección seleccionada.</div></div>`, "Guardar planificación", (form) => {
+      const assignmentIds = form.getAll("assignmentIds"); const planStatus = form.get("planStatus"); const type = form.get("type"); const weight = Number(form.get("weight"));
+      if (!assignmentIds.length) return showFormError("Selecciona al menos un salón con una clase disponible."), false;
+      if (type === "Examen final" && weight !== 25) return showFormError("El examen final debe pesar exactamente 25%."), false;
+      if (type !== "Examen final" && weight > 25) return showFormError("Ninguna actividad puede superar 25%."), false;
+      if (planStatus === "SCHEDULED" && (!form.get("publishAt") || new Date(form.get("publishAt")).getTime() <= Date.now())) return showFormError("La publicación programada debe tener una fecha futura."), false;
+      for (const assignmentId of assignmentIds) {
+        const assignment = assignmentById(assignmentId); const dueDate = form.get(`due__${assignmentId}`);
+        if (!dueDate) return showFormError(`Elige una clase de entrega para ${D.classLabel(data, assignment.classId)}.`), false;
+        if (planStatus !== "DRAFT" && workloadCount(assignment.classId, dueDate) >= 4) return showFormError(`${D.classLabel(data, assignment.classId)} ya tiene cuatro entregas el ${formatDate(dueDate)}. Elige otra clase disponible.`), false;
+        const total = data.activities.filter((entry) => entry.active !== false && entry.assignmentId === assignmentId).reduce((sum, entry) => sum + Number(entry.weight || 0), 0);
+        if (total + weight > 95) return showFormError(`${assignment.name} · ${D.classLabel(data, assignment.classId)} superaría el 95% académico. Disponible: ${Math.max(0, 95 - total)}%.`), false;
+      }
+      const batchId = D.uid("batch");
+      assignmentIds.forEach((assignmentId) => {
+        const assignment = assignmentById(assignmentId); const dueDate = form.get(`due__${assignmentId}`); const meeting = plannerMeetings(assignment, form.get("deliveryWeek")).find((entry) => entry.date === dueDate);
+        const activity = { id: D.uid("act"), batchId, assignmentId, classId: assignment.classId, name: form.get("name").trim(), type, location: form.get("location"), description: form.get("description").trim(), weight, deliveryWeek: form.get("deliveryWeek"), dueDate, dueStart: meeting?.start || null, dueEnd: meeting?.end || null, maxDate: addDays(dueDate, 7), isGroup: type === "Trabajo grupal", latePolicy: "Penalización por cada día de clase de atraso.", latePenalty: Number(form.get("latePenalty")), maxExtensionDays: Number(form.get("maxExtensionDays")), status: "DRAFT", planStatus, publishAt: planStatus === "SCHEDULED" ? new Date(form.get("publishAt")).toISOString() : null, visibleAt: planStatus === "PUBLISHED" ? D.nowIso() : null, active: true, createdAt: D.nowIso(), publishedAt: null, grades: data.students.filter((student) => student.classId === assignment.classId && student.active).map((student) => ({ studentId: student.id, delivery: "PENDING", originalGrade: null, lateDays: 0, penalty: 0, finalGrade: null, receivedAt: null })) };
+        data.activities.push(activity);
+        if (planStatus === "PUBLISHED") data.students.filter((student) => student.classId === assignment.classId && student.active && student.guardianId).forEach((student) => D.addNotification(data, "GUARDIAN", student.guardianId, "ACTIVITY", "Nueva actividad", `${activity.name} · ${assignment.name} · entrega ${formatDate(dueDate)} a las ${meeting?.start || "hora de clase"}.`, student.id));
+      });
+      D.addAudit(data, state.session.actorId, "PLANIFICÓ ACTIVIDAD", `${form.get("name").trim()} · ${assignmentIds.length} salón(es) · ${planStatus}`, "IMPORTANT");
+      persist(planStatus === "DRAFT" ? "Borrador guardado; todavía no ocupa cupo ni es visible para acudientes." : planStatus === "SCHEDULED" ? "Actividad programada. Se publicará al abrir la PWA después de la fecha indicada." : "Actividad publicada para los salones seleccionados.");
+      return true;
+    }, true);
+  }
+
+  function duplicateActivityBatch(activityId) {
+    const source = activityById(activityId); if (!source) return;
+    const originals = data.activities.filter((item) => item.batchId === source.batchId && item.active !== false); const newBatch = D.uid("batch");
+    originals.forEach((item) => data.activities.push({ ...D.clone(item), id: D.uid("act"), batchId: newBatch, name: `${item.name} (copia)`, dueDate: addDays(item.dueDate, 7), maxDate: addDays(item.maxDate || item.dueDate, 7), planStatus: "DRAFT", status: "DRAFT", publishAt: null, visibleAt: null, publishedAt: null, createdAt: D.nowIso(), grades: item.grades.map((grade) => ({ studentId: grade.studentId, delivery: "PENDING", originalGrade: null, lateDays: 0, penalty: 0, finalGrade: null, receivedAt: null })) }));
+    D.addAudit(data, state.session.actorId, "DUPLICÓ ACTIVIDAD", `${source.name} · ${originals.length} salón(es)`, "INFO"); persist("Copia creada como borrador; no ocupa cupo hasta programarla o publicarla."); render();
   }
 
   function openGradeForm(activityId) {
@@ -926,6 +1182,7 @@
     if (action === "modal-backdrop" && event.target === target) closeModal();
     if (action === "close-modal") closeModal();
     if (action === "choose-role") chooseRole(target.dataset.role);
+    if (action === "register-profile") openRegistration(target.dataset.role);
     if (action === "enter-role") enterRole(target.dataset.role, target.dataset.id, false);
     if (action === "logout") { state.session = null; state.view = "dashboard"; saveSession(); render(); }
     if (action === "toggle-menu") { document.querySelector(".sidebar")?.classList.add("open"); document.querySelector(".mobile-overlay")?.classList.add("show"); }
@@ -936,7 +1193,7 @@
     if (action === "admin-view-role") openViewAs(target.dataset.role);
     if (action === "impersonate") enterRole(target.dataset.role, target.dataset.id, true);
     if (action === "user-type") { state.adminUserType = target.dataset.type; render(); }
-    if (action === "new-user") openUserForm(target.dataset.type);
+    if (action === "new-user") toast("Cada profesor, consejero o acudiente crea su propio perfil desde la pantalla inicial.", "error");
     if (action === "edit-user") openUserForm(target.dataset.type, target.dataset.id);
     if (action === "edit-teacher-profile") openTeacherProfile();
     if (action === "delete-user") {
@@ -949,7 +1206,7 @@
       const student = studentById(target.dataset.id);
       confirmModal("Remover estudiante", `Se retirará a ${student.name} de la estructura activa. El historial académico no se elimina.`, "Remover", () => { student.active = false; D.addAudit(data, state.session.actorId, "REMOVIÓ ESTUDIANTE", student.name, "IMPORTANT"); persist("Estudiante removido; historial conservado."); render(); }, true);
     }
-    if (action === "new-class") openClassForm();
+    if (action === "new-class") { if (state.session.role === "COUNSELOR") openClassForm(); else toast("Los salones nuevos los crea el consejero responsable.", "error"); }
     if (action === "counselor-create-class") openClassroomWizard();
     if (action === "edit-class") openClassForm(target.dataset.id);
     if (action === "delete-class") {
@@ -974,6 +1231,7 @@
       if (state.session.role === "GUARDIAN") { state.selectedSubjectId = slot.assignmentId; state.view = "subjects"; render(); }
       else if (target.dataset.editable) openScheduleForm(slot.id);
     }
+    if (action === "schedule-attendance-detail") openScheduleAttendanceDetail(target.dataset.id, target.dataset.date, target.dataset.student);
     if (action === "close-year") {
       confirmModal("Cerrar año lectivo", `Esta acción archivará toda la operación de ${data.institution.activeYear} y abrirá ${data.institution.activeYear + 1} con estructura académica nueva.`, "Cerrar año", () => {
         const year = data.institution.activeYear;
@@ -996,6 +1254,7 @@
     if (action === "open-activities") { state.selectedAssignmentId = target.dataset.assignment; state.view = "activities"; render(); }
     if (action === "new-activity") openActivityForm();
     if (action === "edit-activity") openActivityForm(target.dataset.id);
+    if (action === "duplicate-activity") duplicateActivityBatch(target.dataset.id);
     if (action === "grade-activity") openGradeForm(target.dataset.id);
     if (action === "publish-activity") publishActivity(target.dataset.id);
     if (action === "delete-activity") {
@@ -1088,6 +1347,15 @@
     if (target.dataset.state === "selectedAssignmentId") { state.selectedAssignmentId = target.value; render(); }
     if (target.dataset.state === "attendanceDate") { state.attendanceDate = target.value; render(); }
     if (target.dataset.state === "selectedStudentId") { state.selectedStudentId = target.value; state.selectedSubjectId = null; render(); }
+    if (target.dataset.state === "guardianScheduleWeek") { state.guardianScheduleDate = mondayForWeek(target.value); render(); }
+    if (target.dataset.plannerControl !== undefined) {
+      if (target.name === "catalogId") {
+        const form = target.form; const gradeSelect = form?.elements?.grade;
+        const values = [...new Set(teacherAssignments().filter((item) => item.catalogId === target.value).map((item) => classById(item.classId)?.grade).filter(Boolean))];
+        if (gradeSelect) gradeSelect.innerHTML = values.map((grade) => option(grade, grade, gradeSelect.value)).join("");
+      }
+      refreshActivityPlanner();
+    }
     if (target.dataset.filter) { state.filters[target.dataset.filter] = target.value; render(); }
     if (target.dataset.privacyAudience) { const guardian = guardianById(state.session.actorId); guardian.privacy[target.dataset.privacyAudience].audience = target.value; D.addAudit(data, guardian.id, "MODIFICÓ PRIVACIDAD", `${target.dataset.privacyAudience}: audiencia ${target.value}`, "IMPORTANT"); persist("Audiencia actualizada."); }
     if (target.id === "import-data" && target.files[0]) importJson(target.files[0]);
@@ -1095,6 +1363,10 @@
 
   document.addEventListener("input", (event) => {
     const target = event.target;
+    if (target.dataset.listSearch !== undefined) {
+      const query = D.normalize(target.value); const scope = target.closest(".modal") || document;
+      scope.querySelectorAll("[data-search-text]").forEach((item) => { item.hidden = !D.normalize(item.dataset.searchText).includes(query); });
+    }
     if (target.dataset.filter && target.tagName === "INPUT") {
       state.filters[target.dataset.filter] = target.value;
       clearTimeout(target._eduTimer);

@@ -1,12 +1,12 @@
-/* EduControl v1.1 - datos, persistencia y migraciones.
+/* EduControl v1.2 - datos, persistencia y migraciones.
    La clave educontrol_v1 es deliberadamente estable para futuras actualizaciones. */
 (function () {
   "use strict";
 
   const STORAGE_KEY = "educontrol_v1";
   const SESSION_KEY = "educontrol_session_v1";
-  const APP_VERSION = "1.1.0";
-  const SCHEMA_VERSION = 2;
+  const APP_VERSION = "1.2.0";
+  const SCHEMA_VERSION = 3;
   const DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
   const COLORS = ["#2b73c2", "#0f9b8e", "#9a5fb4", "#d97936", "#5468b1", "#2f8b63", "#ba4b62", "#557986", "#8c6b34", "#45829d", "#7a5ab5", "#aa5d29", "#287e72"];
 
@@ -24,9 +24,9 @@
 
   const SUBJECT_DEFINITIONS = [
     ["Matemática", "t-andres"], ["Español", "t-carolina"], ["Ciencias", "t-daniel"],
-    ["Inglés", "t-lucia"], ["Historia", "t-marcos"], ["Geografía", "t-marcos"],
+    ["Inglés", "t-lucia"], ["Historia", "t-marcos"], ["Geografía", "t-jorge"],
     ["Educación Física", "t-emilio"], ["Arte", "t-isabel"], ["Tecnología", "t-natalia"],
-    ["Orientación", "t-carolina"], ["Formación Cívica", "t-ricardo"], ["Física", "t-andres"],
+    ["Orientación", "t-paula"], ["Formación Cívica", "t-ricardo"], ["Física", "t-roberto"],
     ["Química", "t-sofia"]
   ];
 
@@ -44,8 +44,14 @@
       ["t-ricardo", "Ricardo Ávila", "Formación Cívica", "ravila@horizonte.edu.pa", "6921-1140", "c-7c"],
       ["t-ana", "Ana Belén Ortega", "Biología", "aortega@horizonte.edu.pa", "6812-6640", "c-9a"],
       ["t-carlos", "Carlos Méndez", "Informática", "cmendez@horizonte.edu.pa", "6710-5321"]
+      ,["t-jorge", "Jorge Santamaría", "Geografía", "jsantamaria@horizonte.edu.pa", "6288-4012"]
+      ,["t-paula", "Paula Navarro", "Orientación", "pnavarro@horizonte.edu.pa", "6490-2238"]
+      ,["t-roberto", "Roberto Salcedo", "Física", "rsalcedo@horizonte.edu.pa", "6177-9054"]
     ].map(([id, name, specialty, email, phone, counselorClassId]) => ({
-      id, name, specialty, email, phone, counselorClassId: counselorClassId || null, photo: "", active: true, createdAt: dateIso(-180)
+      id, name, specialty, email, phone,
+      role: counselorClassId ? "COUNSELOR" : "TEACHER",
+      primarySubjectCatalogId: `cat-${normalize(specialty.split(" y ")[0])}`,
+      counselorClassId: counselorClassId || null, photo: "", active: true, createdAt: dateIso(-180)
     }));
   }
 
@@ -59,7 +65,7 @@
       ["c-9a", "9.º", "A", "Premedia", "Matutino", "t-ana"],
       ["c-10b", "10.º", "B", "Media", "Vespertino", "t-sofia"],
       ["c-11a", "11.º", "A", "Media", "Matutino", "t-marcos"]
-    ].map(([id, grade, section, level, shift, counselorId]) => ({ id, grade, section, level, shift, counselorId, room: `Aula ${grade.replace(".º", "")}${section}`, image: "", active: true }));
+    ].map(([id, grade, section, level, shift, counselorId]) => ({ id, grade, section, level, shift, counselorId, createdByCounselorId: counselorId, room: `Aula ${grade.replace(".º", "")}${section}`, image: "", active: true }));
   }
 
   const guardianNames = [
@@ -102,6 +108,8 @@
   const lastNamesA = ["Castillo", "Núñez", "Gómez", "Herrera", "Wong", "Martínez", "Quintero", "Aguilar", "González", "Batista", "Pitti", "Rangel", "Moreno", "Acosta", "Espinosa", "Jaén"];
   const lastNamesB = ["Ruiz", "Pérez", "Jaén", "Vega", "Díaz", "López", "Santos", "Rojas", "Cano", "Mora", "León", "Reyes", "Gil", "Cruz", "Arias", "Peña"];
 
+  const femaleFirstNames = new Set(["Samara", "Lía", "Ana Lucía", "Elena", "Alondra", "Camila", "Isabella", "Victoria", "Emma", "Mía", "Antonella", "Amanda", "Julieta", "Renata", "Sara", "Mariana"]);
+
   function createStudents(classes, guardians) {
     const special = [
       { id: "s-valentina", name: "Valentina Méndez Soto", gender: "F", idNumber: "8-1024-310", birthDate: "2012-04-19", classId: "c-8a", guardianId: "g-mariela" },
@@ -121,7 +129,7 @@
         students.push({
           id: `s-${schoolClass.id.slice(2)}-${String(seat + 1).padStart(2, "0")}`,
           name,
-          gender: sequence % 2 ? "F" : "M",
+          gender: femaleFirstNames.has(first) ? "F" : "M",
           idType: sequence % 19 === 0 ? "Pasaporte" : "Cédula",
           idNumber: sequence % 19 === 0 ? `PA-${284900 + sequence}` : `8-${1000 + classIndex * 10 + seat}-${String(120 + sequence).padStart(3, "0")}`,
           birthDate: `${2015 - classIndex}-${String((seat % 12) + 1).padStart(2, "0")}-${String((seat * 2) % 27 + 1).padStart(2, "0")}`,
@@ -160,8 +168,9 @@
     return assignments;
   }
 
-  function createSchedule(classes, assignments) {
+  function createScheduleLegacy(classes, assignments) {
     const schedule = [];
+    const occupiedTeachers = new Set();
     const morning = [["07:00", "07:45"], ["07:45", "08:30"], ["08:30", "09:15"], ["09:35", "10:20"], ["10:20", "11:05"], ["11:05", "11:50"], ["11:50", "12:35"]];
     const afternoon = [["12:45", "13:30"], ["13:30", "14:15"], ["14:15", "15:00"], ["15:20", "16:05"], ["16:05", "16:50"], ["16:50", "17:35"], ["17:35", "18:20"]];
     classes.forEach((schoolClass, classIndex) => {
@@ -169,7 +178,14 @@
       const periods = schoolClass.shift === "Vespertino" ? afternoon : morning;
       DAYS.forEach((day, dayIndex) => {
         periods.forEach(([start, end], periodIndex) => {
-          const assignment = classAssignments[(dayIndex * 3 + periodIndex + classIndex) % classAssignments.length];
+          const startIndex = (dayIndex * 3 + periodIndex + classIndex) % classAssignments.length;
+          let assignment = null;
+          for (let attempt = 0; attempt < classAssignments.length; attempt += 1) {
+            const candidate = classAssignments[(startIndex + attempt) % classAssignments.length];
+            const teacherKey = `${day}|${start}|${candidate.teacherId}`;
+            if (!occupiedTeachers.has(teacherKey)) { assignment = candidate; occupiedTeachers.add(teacherKey); break; }
+          }
+          assignment = assignment || classAssignments[startIndex];
           schedule.push({
             id: `sch-${classIndex}-${dayIndex}-${periodIndex}`,
             classId: schoolClass.id,
@@ -195,6 +211,33 @@
     return schedule;
   }
 
+  function createSchedule(classes, assignments) {
+    const schedule = []; const counts = new Map(assignments.map((item) => [item.id, 0]));
+    const periodSets = {
+      Matutino: [["07:00", "07:45"], ["07:45", "08:30"], ["08:30", "09:15"], ["09:35", "10:20"], ["10:20", "11:05"], ["11:05", "11:50"], ["11:50", "12:35"]],
+      Vespertino: [["12:45", "13:30"], ["13:30", "14:15"], ["14:15", "15:00"], ["15:20", "16:05"], ["16:05", "16:50"], ["16:50", "17:35"], ["17:35", "18:20"]]
+    };
+    Object.entries(periodSets).forEach(([shift, periods]) => {
+      const shiftClasses = classes.filter((item) => item.shift === shift);
+      DAYS.forEach((day, dayIndex) => {
+        periods.forEach(([start, end], periodIndex) => {
+          const usedTeachers = new Set();
+          const orderedClasses = [...shiftClasses.slice((dayIndex + periodIndex) % Math.max(1, shiftClasses.length)), ...shiftClasses.slice(0, (dayIndex + periodIndex) % Math.max(1, shiftClasses.length))];
+          orderedClasses.forEach((schoolClass, classOrder) => {
+            const options = assignments.filter((item) => item.classId === schoolClass.id);
+            const rotation = (dayIndex * periods.length + periodIndex + classOrder) % options.length;
+            const ranked = options.map((item, index) => ({ item, score: (counts.get(item.id) || 0) * 100 + ((index - rotation + options.length) % options.length) })).sort((a, b) => a.score - b.score);
+            const selected = ranked.find(({ item }) => !usedTeachers.has(item.teacherId))?.item || ranked[0].item;
+            usedTeachers.add(selected.teacherId); counts.set(selected.id, (counts.get(selected.id) || 0) + 1);
+            schedule.push({ id: `sch-${schoolClass.id}-${dayIndex}-${periodIndex}`, classId: schoolClass.id, assignmentId: selected.id, teacherId: selected.teacherId, day, start, end, room: schoolClass.room, kind: "CLASS", active: true });
+          });
+        });
+        shiftClasses.forEach((schoolClass) => schedule.push({ id: `sch-break-${schoolClass.id}-${dayIndex}`, classId: schoolClass.id, assignmentId: null, teacherId: null, day, start: shift === "Vespertino" ? "15:00" : "09:15", end: shift === "Vespertino" ? "15:20" : "09:35", room: "Área común", kind: "BREAK", active: true }));
+      });
+    });
+    return schedule;
+  }
+
   function gradeFor(studentIndex, activityIndex) {
     const raw = 3.2 + ((studentIndex * 7 + activityIndex * 11) % 18) / 10;
     return Math.min(5, oneDecimal(raw));
@@ -204,10 +247,11 @@
     const activities = [];
     assignments.forEach((assignment, assignmentIndex) => {
       const classStudents = students.filter((student) => student.classId === assignment.classId);
+      const classPosition = assignments.filter((item) => item.classId === assignment.classId).findIndex((item) => item.id === assignment.id);
       const templates = [
-        { suffix: "Práctica aplicada", type: "Ejercicio", weight: 10, offset: -18, published: true, group: false },
-        { suffix: "Proyecto del trimestre", type: "Proyecto", weight: 15, offset: -4, published: assignmentIndex % 3 !== 1, group: assignmentIndex % 4 === 0 },
-        { suffix: "Examen final", type: "Examen final", weight: 25, offset: 28, published: false, group: false }
+        { suffix: "Práctica aplicada", type: "Ejercicio", weight: 10, offset: -20 + (classPosition % 5), published: true, group: false, location: "En clase" },
+        { suffix: "Proyecto del trimestre", type: "Proyecto", weight: 15, offset: 3 + (classPosition % 5), published: true, group: assignmentIndex % 4 === 0, location: "En casa" },
+        { suffix: "Examen final", type: "Evaluación", weight: 25, offset: 28 + (classPosition % 5), published: false, group: false, location: "En clase" }
       ];
       templates.forEach((template, activityIndex) => {
         const activityId = `act-${assignment.id.slice(3)}-${activityIndex + 1}`;
@@ -227,10 +271,12 @@
         });
         activities.push({
           id: activityId,
+          batchId: `batch-${activityId}`,
           assignmentId: assignment.id,
           classId: assignment.classId,
           name: `${template.suffix} · ${assignment.name}`,
           type: template.type,
+          location: template.location,
           description: activityIndex === 2 ? "Evaluación final obligatoria del trimestre." : "Actividad de aplicación y seguimiento académico.",
           weight: template.weight,
           dueDate: dateIso(template.offset),
@@ -240,6 +286,9 @@
           latePenalty: assignment.latePenalty,
           maxExtensionDays: 3,
           status: template.published ? "PUBLISHED" : "DRAFT",
+          planStatus: template.published ? "PUBLISHED" : "DRAFT",
+          publishAt: template.published ? `${dateIso(template.offset - 10)}T06:00:00.000Z` : null,
+          deliveryWeek: "",
           createdAt: `${dateIso(template.offset - 12)}T14:00:00.000Z`,
           publishedAt: template.published ? `${dateIso(template.offset + 2)}T18:00:00.000Z` : null,
           grades
@@ -410,6 +459,20 @@
       (data.classes || []).forEach((item) => { if (typeof item.image !== "string") item.image = ""; });
       ["assignments", "schedule", "activities", "citations", "observations", "extensions", "groups"].forEach((key) => {
         (data[key] || []).forEach((item) => { if (typeof item.active !== "boolean") item.active = true; });
+      });
+    }
+    if (version < 3) {
+      (data.teachers || []).forEach((item) => {
+        item.role = item.role === "COUNSELOR" || item.counselorClassId ? "COUNSELOR" : "TEACHER";
+        item.primarySubjectCatalogId = item.primarySubjectCatalogId || `cat-${normalize(String(item.specialty || "Materia").split(" y ")[0])}`;
+      });
+      (data.classes || []).forEach((item) => { item.createdByCounselorId = item.createdByCounselorId || item.counselorId || null; });
+      (data.activities || []).forEach((item) => {
+        item.batchId = item.batchId || `batch-${item.id}`;
+        item.location = item.location || (item.type === "Tarea" || item.type === "Proyecto" ? "En casa" : "En clase");
+        item.planStatus = item.planStatus || (item.active === false || item.status === "ANNULLED" ? "ANNULLED" : item.status === "PUBLISHED" ? "PUBLISHED" : "DRAFT");
+        item.publishAt = item.publishAt || item.publishedAt || null;
+        item.deliveryWeek = item.deliveryWeek || "";
       });
     }
     data.schemaVersion = SCHEMA_VERSION;

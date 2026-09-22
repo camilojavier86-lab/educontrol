@@ -26,6 +26,41 @@
   font-synthesis: none;
 }
 
+/* v1.2 · perfiles propios, planificación semanal y asistencia en horario */
+.wide-action{width:100%;margin-top:16px;justify-content:center}
+.searchable-list{max-height:min(52vh,520px);overflow:auto;padding-right:4px}
+.planner-summary{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.planner-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:12px}
+.planner-section{border:1px solid var(--line,#dce4ea);border-radius:16px;padding:14px;background:#f8fbfd;display:grid;gap:10px}
+.planner-section.full{background:#fff4f3;border-color:#efb4ae}
+.planner-section .field{margin:0}
+.capacity-row{display:flex;gap:6px;flex-wrap:wrap}
+.capacity-chip{display:inline-flex;padding:4px 8px;border-radius:999px;font-size:.7rem;font-weight:850}
+.capacity-chip.cap-open{background:#dff5e9;color:#16714a}
+.capacity-chip.cap-last{background:#fff0c7;color:#8b5b00}
+.capacity-chip.cap-full{background:#ffe0de;color:#a92920}
+.attendance-board .day-title{display:flex;flex-direction:column;gap:2px}
+.attendance-board .day-title small{font-weight:500;color:var(--muted,#667780)}
+.attendance-slot{gap:7px!important}
+.attendance-chip{display:inline-flex;align-items:center;width:max-content;max-width:100%;padding:5px 9px;border-radius:999px;font-size:.72rem;font-weight:800;background:#eef2f5;color:#5e6a72}
+.attendance-chip.present{background:#dff5e9;color:#16714a}
+.attendance-chip.late{background:#fff0c7;color:#8b5b00}
+.attendance-chip.early{background:#ffe5cc;color:#a34f00}
+.attendance-chip.absent{background:#ffe0de;color:#a92920}
+.attendance-chip.justified{background:#dceeff;color:#1c5f9c}
+.attendance-chip.pending{background:#e7f3fb;color:#316b8f}
+.attendance-chip.future,.attendance-chip.unmarked{background:#edf1f4;color:#69757d}
+.class-detail{display:grid;gap:16px}
+.class-detail h3,.class-detail p{margin:0}
+.version-tag{white-space:nowrap}
+@media(max-width:720px){
+  .planner-sections{grid-template-columns:1fr}
+  .planner-section{padding:12px}
+  .attendance-board{display:grid!important;grid-auto-flow:row!important;grid-template-columns:1fr!important;overflow:visible!important}
+  .attendance-board .day-column{min-width:0!important}
+  .wide-action{min-height:48px}
+}
+
 * { box-sizing: border-box; }
 html { min-height: 100%; background: var(--bg); }
 body { min-height: 100vh; margin: 0; background: var(--bg); }

@@ -1,0 +1,22 @@
+# Cambios de EduControl v1.2.0
+
+- Perfiles propios con fotografía para profesor, consejero y acudiente.
+- Rol docente exclusivo: profesor o consejero; el consejero conserva su docencia en la misma cuenta.
+- Un consejero crea y administra un único salón por año lectivo.
+- El administrador deja de crear profesores, acudientes, estudiantes y salones; conserva supervisión, corrección, auditoría y “Ver como”.
+- El consejero registra estudiantes en su salón y puede reutilizar acudientes existentes.
+- El acudiente nuevo puede vincular su primer estudiante mediante cédula, nombre y grado.
+- El docente crea una asignación al agregar al horario su materia y un salón existente.
+- Horario consolidado construido con las horas aportadas por los profesores.
+- Actividades por materia, grado y múltiples secciones, creadas en un solo paso.
+- Lugar de realización: en clase o en casa.
+- Planificación trimestral con borrador, publicación programada o publicación inmediata.
+- Entrega semanal en una clase real; la hora se calcula automáticamente.
+- Límite estricto de cuatro compromisos entregables por salón/día.
+- Días llenos deshabilitados y capacidad visible en el planificador.
+- Duplicación de actividades como borrador.
+- Horario del acudiente con presencia, tardanza, retiro, ausencia, justificación y estado pendiente por clase.
+- Búsqueda rápida de perfiles y estudiantes.
+- Estado general del salón del consejero: Al día, Revisar o Requiere atención.
+- Datos ficticios reequilibrados: horarios completos sin conflictos, carga docente realista y fechas de actividades distribuidas.
+- Migración automática de esquema 2 a esquema 3 sin cambiar `educontrol_v1`.

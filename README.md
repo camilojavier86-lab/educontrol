@@ -1,54 +1,56 @@
-# EduControl v1.1
+# EduControl v1.2.0
 
-Prototipo funcional avanzado para GitHub Pages. No requiere servidor, compilación ni dependencias externas.
+PWA escolar funcional para GitHub Pages. Funciona con HTML, CSS y JavaScript, conserva los datos en `localStorage` con la clave fija `educontrol_v1` y migra automáticamente los datos creados con v1.1.
 
 ## Abrir la aplicación
 
-La forma recomendada es publicarla en GitHub Pages siguiendo `GUIA_PUBLICACION.md`. También puede servirse con cualquier servidor web estático.
+Publique todos los archivos en la raíz del repositorio de GitHub Pages y abra:
+
+`https://<usuario>.github.io/educontrol/`
+
+Para una prueba local completa use un servidor HTTP. Abrir `index.html` directamente permite ver gran parte de la aplicación, pero la instalación PWA y el service worker requieren HTTPS o `localhost`.
+
+## Flujo de usuarios v1.2
+
+- Administrador: configura la institución, supervisa, corrige, audita y usa “Ver como”. No crea perfiles, estudiantes ni salones.
+- Profesor: crea su propio perfil con fotografía y una función exclusiva de profesor. Registra su materia en salones existentes al montar su horario.
+- Profesor consejero: crea su propio perfil, conserva todas las funciones docentes y crea un único salón de consejería por año lectivo.
+- Acudiente: crea su perfil con fotografía y vincula estudiantes previamente registrados mediante nombre, grado y cédula.
+
+Una cuenta docente entra como profesor o como consejero, nunca por ambos accesos. El consejero enseña su materia desde la misma cuenta.
+
+## Planificación de actividades
+
+El docente selecciona materia, grado, semana y secciones. EduControl presenta únicamente los salones donde ese docente imparte la materia y calcula la fecha/hora de entrega desde su horario.
+
+- Lugar: en clase o en casa.
+- Estados: borrador, programada y publicada.
+- Las programadas se activan cuando la PWA vuelve a abrirse después de la fecha indicada.
+- El contenido se escribe una vez, pero las entregas y notas permanecen separadas por salón y estudiante.
+- Máximo cuatro actividades entregables por salón y día.
+- Los borradores no ocupan cupo.
+- Una actividad puede duplicarse como borrador.
+
+GitHub Pages no garantiza tareas de servidor ni push en segundo plano; la publicación programada se evalúa al abrir la PWA.
 
 ## Persistencia
 
-- Datos principales: `localStorage` con la clave fija `educontrol_v1`.
-- Sesión de prueba: `sessionStorage` con la clave `educontrol_session_v1`.
-- Los datos ficticios solo se crean cuando `educontrol_v1` no existe.
-- Las futuras versiones deben migrar la estructura sin cambiar la clave ni reiniciar los datos.
-- El restablecimiento solo ocurre al usar Administrador → Configuración → Restablecer datos de demostración.
+- Clave estable: `educontrol_v1`.
+- Esquema actual: 3.
+- La migración agrega roles exclusivos, campos de planificación y referencias del consejero sin borrar datos existentes.
+- “Restablecer datos de demostración” es la única acción que reemplaza voluntariamente el contenido local por los datos ficticios iniciales.
 
-## Contenido inicial
+## Datos de demostración
 
-- 4 perfiles funcionales.
-- 8 salones.
-- 96 estudiantes.
-- 48 acudientes.
-- 12 profesores, incluyendo 8 consejeros.
-- 100 asignaciones de materia.
-- 320 bloques de horario.
-- 300 actividades con entregas y calificaciones.
-- 480 registros de asistencia.
-- Citaciones, autorizaciones, observaciones, grupos, prórrogas, justificaciones, notificaciones y auditoría.
+Incluye 96 estudiantes, 15 docentes, 8 consejeros, 8 salones, 300 actividades, horarios completos sin conflictos ficticios, notas, asistencias, justificaciones, grupos, prórrogas, observaciones, citaciones, autorizaciones e invitaciones.
 
-## Cambios principales de v1.1
+## Archivos principales
 
-- Horario colaborativo: cada profesor registra cada hora de su materia y salón.
-- Panel docente en tiempo real con clase actual, próxima clase y acceso directo a asistencia.
-- Horario consolidado del estudiante para el acudiente, con materias navegables.
-- Creación del salón desde cero por el profesor consejero.
-- Invitaciones de acudientes por WhatsApp, correo o enlace copiable, con estados de seguimiento.
-- Fotografías optimizadas para profesores, acudientes, estudiantes y salones.
-- Formularios guiados, cápsulas navegables y tablas convertidas en tarjetas en móvil.
-- Eliminación o anulación auditada de los principales registros creados.
-- Migración automática del esquema 1 al esquema 2 sin cambiar `educontrol_v1`.
-
-## Archivos de la aplicación
-
-- `index.html`: entrada de GitHub Pages.
-- `styles.css`: diseño responsive para computadora y teléfono.
-- `data.js`: datos ficticios, migraciones y persistencia.
-- `app.js`: interfaz y flujos funcionales.
+- `index.html`: entrada de la aplicación.
+- `styles.css`: diseño responsive.
+- `data.js`: datos iniciales, persistencia y migraciones.
+- `app.js`: navegación y lógica funcional.
 - `manifest.webmanifest`: configuración PWA.
-- `sw.js`: funcionamiento sin conexión después de la primera carga.
+- `sw.js`: caché para funcionamiento instalable/offline.
 - `icon-192.png` y `icon-512.png`: iconos PWA.
 
-## Límite deliberado de esta etapa
-
-Los datos viven solamente en el navegador y dispositivo donde se usan. WhatsApp y correo preparan invitaciones reales, pero no sincronizan datos entre dispositivos. No hay autenticación compartida ni notificaciones push garantizadas. Una etapa comercial debe migrar el almacenamiento a un servicio seguro con control de acceso.
