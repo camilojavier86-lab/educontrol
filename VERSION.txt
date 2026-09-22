@@ -1,0 +1,4 @@
+EduControl 1.1.0
+Esquema de datos: 2
+Clave persistente: educontrol_v1
+Fecha: 2026-09-22
