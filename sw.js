@@ -1,10 +1,10 @@
-const CACHE_NAME = "educontrol-shell-v1.3.0";
+const CACHE_NAME = "educontrol-shell-v1.4.0";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=1.3.0",
-  "./data.js?v=1.3.0",
-  "./app.js?v=1.3.0",
+  "./styles.css?v=1.4.0",
+  "./data.js?v=1.4.0",
+  "./app.js?v=1.4.0",
   "./manifest.webmanifest",
   "./icon-192.png",
   "./icon-512.png"

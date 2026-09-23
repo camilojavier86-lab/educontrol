@@ -1,4 +1,4 @@
-# EduControl v1.3.0
+# EduControl v1.4.0
 
 PWA escolar funcional para GitHub Pages. Funciona con HTML, CSS y JavaScript y conserva los datos en `localStorage` con la clave fija `educontrol_v1`.
 
@@ -25,7 +25,7 @@ La actualización no borra ni reemplaza datos existentes. Desde Configuración s
 2. El profesor consejero crea su perfil exclusivo, su materia y un solo salón de consejería.
 3. El consejero define grado, sección, nivel, turno, aula y bachillerato/programa; luego registra estudiantes.
 4. El profesor crea su perfil y puede escribir una materia que todavía no exista.
-5. El profesor selecciona un salón existente y agrega clases por espacio 1, 2, 3, etc.; puede unir dos espacios consecutivos.
+5. El profesor elige una jornada, ve la cuadrícula institucional, selecciona uno o dos espacios disponibles y luego indica el grado y salón.
 6. El acudiente crea su perfil, vincula al estudiante por nombre, grado y cédula y es el único que puede administrar la fotografía del estudiante.
 
 Una cuenta docente entra como profesor o como consejero, nunca por los dos accesos. El consejero también enseña desde esa misma cuenta.
@@ -33,12 +33,16 @@ Una cuenta docente entra como profesor o como consejero, nunca por los dos acces
 ## Horarios y lugares
 
 - Semana de lunes a viernes, un día por columna.
+- La semana actual abre en el día de hoy; los días pasados quedan a la izquierda y los próximos a la derecha.
+- Incluye botones para semana anterior, esta semana y semana siguiente.
 - Marca la clase que está ocurriendo en el momento real.
 - Cada bloque muestra materia, profesor, salón, hora, lugar, asistencia y actividades programadas.
+- La misma cuadrícula se usa en los perfiles de profesor, consejero, acudiente y administrador.
+- Materias del acudiente incluye el horario completo y, al abrir una materia, su horario filtrado.
 - El lugar habitual es opcional; si queda vacío se usa el aula de consejería.
 - El profesor puede cambiar el lugar solo para una fecha o convertirlo en lugar habitual.
 - En un bloque doble puede cambiar el lugar de ambos espacios o de cada mitad.
-- Los conflictos se alertan y auditan, pero no bloquean el guardado.
+- Los espacios ocupados por el profesor o el salón permanecen visibles, pero no se pueden seleccionar. Los posibles cruces de lugar se notifican a la administración.
 
 ## Actividades
 
@@ -65,7 +69,7 @@ La publicación programada se procesa al volver a abrir la PWA. GitHub Pages no 
 
 - Clave estable: `educontrol_v1`.
 - Esquema actual: 4.
-- La migración desde v1.2 agrega turnos, programas, lugares, espacios, cambios de aula, avisos y ausencias sin borrar los registros existentes.
+- Las actualizaciones conservan turnos, programas, lugares, espacios, cambios de aula, avisos y ausencias sin borrar los registros existentes.
 - Antes de acciones de reinicio se mantiene disponible la descarga de respaldo JSON.
 
 ## Archivos principales

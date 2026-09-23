@@ -1,10 +1,10 @@
-# Verificación de EduControl v1.3.0
+# Verificación de EduControl v1.4.0
 
 ## Prueba automatizada integral desde cero
 
 Ejecutada con:
 
-`node integration-test-v1.3.js`
+`node integration-test-v1.4.js`
 
 Resultado: **44 comprobaciones aprobadas**.
 
@@ -38,7 +38,7 @@ Flujo verificado:
 
 Ejecutada con:
 
-`node regression-test-v1.3.js`
+`node regression-test-v1.4.js`
 
 Resultado: **35 comprobaciones adicionales aprobadas**. Se volvieron a verificar sobre los datos de demostración:
 
@@ -54,7 +54,26 @@ Resultado: **35 comprobaciones adicionales aprobadas**. Se volvieron a verificar
 - horario consolidado y detalle de asistencia;
 - migración y persistencia.
 
-Total de esta entrega: **79 comprobaciones funcionales aprobadas**.
+## Prueba específica del horario v1.4
+
+Ejecutada con:
+
+`node schedule-test-v1.4.js`
+
+Resultado: **26 comprobaciones aprobadas**.
+
+Se verificó:
+
+- cinco días en columnas para profesor, consejero y acudiente;
+- navegación entre semana anterior, actual y siguiente;
+- posición inicial marcada mediante el día de la semana actual;
+- cuadrícula institucional dentro del formulario docente;
+- espacios ocupados visibles y desactivados;
+- alternancia del consejero entre sus clases y su salón;
+- horario completo dentro de Materias del acudiente;
+- horario filtrado dentro del detalle de una materia.
+
+Total de esta entrega: **105 comprobaciones funcionales aprobadas**.
 
 Resultado concreto de la prueba de reprogramación:
 
@@ -69,9 +88,9 @@ Resultado concreto de la prueba de reprogramación:
 - `node --check app.js`: aprobado.
 - `node --check sw.js`: aprobado.
 - Clave de almacenamiento: `educontrol_v1`.
-- Versión: `1.3.0`.
+- Versión: `1.4.0`.
 - Esquema: `4`.
-- Caché PWA: `educontrol-shell-v1.3.0`.
+- Caché PWA: `educontrol-shell-v1.4.0`.
 
 ## Comprobaciones visuales
 

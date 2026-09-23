@@ -1,11 +1,11 @@
-/* EduControl v1.3 - datos, persistencia y migraciones.
+/* EduControl v1.4 - datos, persistencia y migraciones.
    La clave educontrol_v1 es deliberadamente estable para futuras actualizaciones. */
 (function () {
   "use strict";
 
   const STORAGE_KEY = "educontrol_v1";
   const SESSION_KEY = "educontrol_session_v1";
-  const APP_VERSION = "1.3.0";
+  const APP_VERSION = "1.4.0";
   const SCHEMA_VERSION = 4;
   const DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
   const COLORS = ["#2b73c2", "#0f9b8e", "#9a5fb4", "#d97936", "#5468b1", "#2f8b63", "#ba4b62", "#557986", "#8c6b34", "#45829d", "#7a5ab5", "#aa5d29", "#287e72"];

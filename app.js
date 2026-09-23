@@ -146,6 +146,24 @@
     const monday = new Date(jan4); monday.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7) + (week - 1) * 7);
     return monday.toISOString().slice(0, 10);
   }
+  function weekMonday(dateValue = D.dateIso(0)) { return mondayForWeek(weekValue(dateValue)); }
+  function weekNavigator(stateKey) {
+    const monday = weekMonday(state[stateKey] || D.dateIso(0));
+    const friday = addDays(monday, 4);
+    const current = monday === weekMonday(D.dateIso(0));
+    return `<nav class="week-navigator" aria-label="Cambiar semana"><button type="button" class="button ghost small" data-action="change-schedule-week" data-key="${attr(stateKey)}" data-days="-7">${icon("arrow")} Semana anterior</button><div class="week-range"><strong>${formatDate(monday)} – ${formatDate(friday)}</strong><small>${current ? "Semana actual" : `Semana ${weekValue(monday).split("W")[1]}`}</small></div><button type="button" class="button ghost small" data-action="schedule-current-week" data-key="${attr(stateKey)}" ${current ? "disabled" : ""}>Esta semana</button><button type="button" class="button ghost small next" data-action="change-schedule-week" data-key="${attr(stateKey)}" data-days="7">Semana siguiente ${icon("arrow")}</button></nav>`;
+  }
+  function weeklyFocusDay(monday) {
+    if (monday !== weekMonday(D.dateIso(0))) return "Lunes";
+    const today = currentDayName();
+    return D.DAYS.includes(today) ? today : "Lunes";
+  }
+  function positionWeeklyGrids() {
+    app.querySelectorAll(".weekly-grid-wrap[data-focus-day]").forEach((wrapper) => {
+      const column = [...wrapper.querySelectorAll(".day-column")].find((item) => item.dataset.day === wrapper.dataset.focusDay);
+      if (column) wrapper.scrollLeft = Math.max(0, column.offsetLeft - 4);
+    });
+  }
   function shiftSlotsForClass(classId) {
     const schoolClass = classById(classId); const template = shiftById(schoolClass?.shiftTemplateId);
     return D.buildShiftSlots(template);
@@ -368,7 +386,7 @@
     else if (state.session.role === "GUARDIAN") renderGuardian();
     else renderShell(renderTeacher(), navForRole(state.session.role));
     if (state.session?.role === "ADMIN") app.querySelectorAll('[data-action="new-user"],[data-action="new-student"],[data-action="new-class"],[data-action="new-assignment"],[data-action="new-schedule"]').forEach((button) => button.remove());
-    setTimeout(enhanceResponsiveTables, 0);
+    setTimeout(() => { enhanceResponsiveTables(); positionWeeklyGrids(); }, 0);
   }
 
   function renderAdmin() {
@@ -461,7 +479,8 @@
   function renderAdminSchedule() {
     const classFilter = state.filters.scheduleClass || data.classes[0]?.id;
     const conflicts = scheduleConflicts();
-    return `${pageHead("Organización", "Horarios", "Los conflictos se alertan pero no bloquean el guardado.", `<button class="button" data-action="new-schedule">${icon("plus")} Agregar clase</button>`)}<div class="toolbar"><label class="field"><span>Salón</span><select class="select" data-filter="scheduleClass">${data.classes.map((item) => option(item.id, D.classLabel(data, item.id), classFilter)).join("")}</select></label><span class="pill info">${data.schedule.filter((item) => item.classId === classFilter && item.kind === "CLASS").length} horas académicas semanales</span><span class="pill ${conflicts.length ? "warning" : "success"}">${conflicts.length} conflictos detectados</span></div>${conflicts.length ? `<div class="notice warning" style="margin-bottom:16px">Hay ${conflicts.length} cruces de profesor. Se guardaron para que el Administrador pueda resolverlos sin perder información.</div>` : ""}<section class="card"><div class="card-body">${scheduleBoard(data.schedule.filter((item) => item.classId === classFilter), true)}</div></section>`;
+    const slots = data.schedule.filter((item) => item.classId === classFilter && item.kind === "CLASS" && item.active);
+    return `${pageHead("Organización", "Horarios", "Consulta el horario institucional con la misma cuadrícula semanal que utilizan profesores y familias.", "")}<div class="toolbar"><label class="field"><span>Salón</span><select class="select" data-filter="scheduleClass">${data.classes.map((item) => option(item.id, D.classLabel(data, item.id), classFilter)).join("")}</select></label><span class="pill info">${slots.reduce((sum, item) => sum + Number(item.span || 1), 0)} horas académicas semanales</span><span class="pill ${conflicts.length ? "warning" : "success"}">${conflicts.length} conflictos detectados</span></div>${weekNavigator("teacherScheduleDate")}${conflicts.length ? `<div class="notice warning" style="margin-bottom:16px">Existen ${conflicts.length} cruces históricos por resolver. Los nuevos registros bloquean los espacios ocupados del profesor y del salón.</div>` : ""}<section class="card"><div class="card-body">${scheduleBoard(slots, true, state.teacherScheduleDate)}</div></section>`;
   }
 
   function renderAcademicYear() {
@@ -510,9 +529,38 @@
     });
   }
 
-  function scheduleBoard(slots, editable) {
-    const moment = scheduleMoment(slots); const monday = mondayForWeek(weekValue(state.teacherScheduleDate || D.dateIso(0)));
-    return `<div class="weekly-grid-wrap"><div class="schedule-board weekly-grid">${D.DAYS.map((day, dayIndex) => { const date = addDays(monday, dayIndex); return `<div class="day-column ${day === moment.day && date === D.dateIso(0) ? "today" : ""}" data-day="${day}"><div class="day-title">${day}<small>${formatDate(date)}</small>${date === D.dateIso(0) ? `<span>Hoy</span>` : ""}</div>${slots.filter((item) => item.day === day && item.active).sort((a, b) => a.start.localeCompare(b.start)).map((slot) => { if (slot.kind === "BREAK") return `<div class="schedule-slot break"><strong>Recreo</strong><small>${slot.start}–${slot.end}</small></div>`; const move = scheduleMoveForOccurrence(slot, date); const movedTo = move?.toSlotId === slot.id; const movedOut = move?.fromSlotId === slot.id; const sourceSlot = movedTo ? data.schedule.find((item) => item.id === move.fromSlotId) : slot; const assignment = assignmentById(sourceSlot?.assignmentId); const count = movedOut ? 0 : activityCountForOccurrence(sourceSlot || slot, date); const absence = movedTo ? null : teacherAbsenceForSlot(slot, date); const current = moment.current?.id === slot.id && date === D.dateIso(0); const action = state.session?.role === "ADMIN" && editable && !move ? "schedule-slot" : "open-schedule-detail"; const targetSlotId = movedTo ? sourceSlot?.id : slot.id; const destination = move ? data.schedule.find((item) => item.id === move.toSlotId) : null; const moveNote = movedTo ? `Clase adelantada desde ${sourceSlot?.start}` : movedOut ? `Adelantada a ${destination?.start}` : ""; return `<article class="schedule-slot ${current ? "current" : ""} ${absence ? "teacher-absent" : ""} ${move ? "moved-class" : ""}">${current ? `<span class="now-marker">Ahora</span>` : ""}<button class="slot-main" data-action="${action}" data-id="${targetSlotId}" data-display="${movedTo ? slot.id : ""}" data-date="${date}" ${editable && !move ? `data-editable="true"` : ""}><span class="pill info">Espacio ${slot.slotIndex || "—"} · ${slot.start}–${slot.end}</span><strong>${esc(assignment?.name || "Materia")}</strong><small>${esc(D.classLabel(data, slot.classId))} · ${esc(occurrenceRoom(movedTo ? slot : sourceSlot || slot, date))}</small>${moveNote ? `<em>${esc(moveNote)}</em>` : absence ? `<em>Profesor ausente · clase por reorganizar</em>` : current ? `<em>En curso ahora</em>` : ""}</button>${count ? `<button class="activity-capsule" data-action="open-schedule-detail" data-id="${targetSlotId}" data-display="${movedTo ? slot.id : ""}" data-date="${date}">${count} actividad${count === 1 ? "" : "es"} programada${count === 1 ? "" : "s"} →</button>` : ""}</article>`; }).join("")}</div>`; }).join("")}</div></div>`;
+  function scheduleCellMarkup(slot, date, editable, continuation = false) {
+    const move = scheduleMoveForOccurrence(slot, date); const movedTo = move?.toSlotId === slot.id; const movedOut = move?.fromSlotId === slot.id;
+    const sourceSlot = movedTo ? data.schedule.find((item) => item.id === move.fromSlotId) : slot;
+    const assignment = assignmentById(sourceSlot?.assignmentId); const count = movedOut ? 0 : activityCountForOccurrence(sourceSlot || slot, date);
+    const absence = movedTo ? null : teacherAbsenceForSlot(slot, date); const now = new Date();
+    const current = date === D.dateIso(0) && currentDayName(now) === slot.day && clockMinutes(slot.start) <= now.getHours() * 60 + now.getMinutes() && now.getHours() * 60 + now.getMinutes() < clockMinutes(slot.end);
+    const action = state.session?.role === "ADMIN" && editable && !move ? "schedule-slot" : "open-schedule-detail";
+    const targetSlotId = movedTo ? sourceSlot?.id : slot.id; const destination = move ? data.schedule.find((item) => item.id === move.toSlotId) : null;
+    const moveNote = movedTo ? `Clase adelantada desde ${sourceSlot?.start}` : movedOut ? `Adelantada a ${destination?.start}` : "";
+    return `<article class="schedule-slot ${continuation ? "continuation" : ""} ${current ? "current" : ""} ${absence ? "teacher-absent" : ""} ${move ? "moved-class" : ""}">${current ? `<span class="now-marker">Ahora</span>` : ""}<button class="slot-main" data-action="${action}" data-id="${targetSlotId}" data-display="${movedTo ? slot.id : ""}" data-date="${date}" ${editable && !move ? `data-editable="true"` : ""}><span class="pill info">${continuation ? "Continuación · " : `Espacio ${slot.slotIndex || "—"} · `}${slot.start}–${slot.end}</span><strong>${esc(assignment?.name || "Materia")}</strong><small>${esc(D.classLabel(data, slot.classId))} · ${esc(occurrenceRoom(movedTo ? slot : sourceSlot || slot, date))}</small>${moveNote ? `<em>${esc(moveNote)}</em>` : absence ? `<em>Profesor ausente · clase por reorganizar</em>` : current ? `<em>En curso ahora</em>` : ""}</button>${!continuation && count ? `<button class="activity-capsule" data-action="open-schedule-detail" data-id="${targetSlotId}" data-display="${movedTo ? slot.id : ""}" data-date="${date}">${count} actividad${count === 1 ? "" : "es"} programada${count === 1 ? "" : "s"} →</button>` : ""}</article>`;
+  }
+
+  function scheduleBoard(slots, editable, dateValue = state.teacherScheduleDate || D.dateIso(0)) {
+    const monday = weekMonday(dateValue); const focusDay = weeklyFocusDay(monday);
+    const templateIds = [...new Set(slots.map((slot) => classById(slot.classId)?.shiftTemplateId).filter(Boolean))];
+    const templates = (templateIds.length ? templateIds.map(shiftById) : data.shiftTemplates.filter((item) => item.active)).filter(Boolean);
+    if (!templates.length) return empty("Sin jornada", "El colegio debe configurar al menos una jornada con espacios de 45 minutos.");
+    return templates.map((template) => {
+      const templateSlots = slots.filter((slot) => classById(slot.classId)?.shiftTemplateId === template.id);
+      const periods = D.buildShiftSlots(template);
+      const grid = `<div class="weekly-grid-wrap" data-focus-day="${focusDay}"><div class="schedule-board weekly-grid">${D.DAYS.map((day, dayIndex) => {
+        const date = addDays(monday, dayIndex); const daySlots = templateSlots.filter((item) => item.day === day && item.active);
+        return `<div class="day-column ${date === D.dateIso(0) ? "today" : ""}" data-day="${day}"><div class="day-title">${day}<small>${formatDate(date)}</small>${date === D.dateIso(0) ? `<span>Hoy</span>` : ""}</div>${periods.map((period) => {
+          if (period.kind === "BREAK") return `<div class="schedule-slot break"><strong>Recreo</strong><small>${period.start}–${period.end}</small></div>`;
+          const slot = daySlots.find((item) => Number(item.slotIndex) <= Number(period.index) && Number(period.index) < Number(item.slotIndex) + Number(item.span || 1));
+          if (slot) return scheduleCellMarkup(slot, date, editable, Number(period.index) > Number(slot.slotIndex));
+          const canAdd = editable && ["TEACHER", "COUNSELOR"].includes(state.session?.role);
+          return canAdd ? `<button type="button" class="schedule-slot empty-slot interactive" data-action="new-schedule" data-shift="${template.id}" data-day="${day}" data-slot="${period.index}"><strong>Espacio ${period.index} · Disponible</strong><small>${period.start}–${period.end} · Agregar clase</small></button>` : `<div class="schedule-slot empty-slot"><strong>Espacio ${period.index}</strong><small>${period.start}–${period.end} · Sin clase</small></div>`;
+        }).join("")}</div>`;
+      }).join("")}</div></div>`;
+      return `<section class="schedule-shift"><div class="schedule-shift-head"><div><strong>${esc(template.name)}</strong><small>${periods.filter((item) => item.kind === "CLASS").length} espacios de 45 minutos</small></div><span class="pill info">${templateSlots.reduce((sum, item) => sum + Number(item.span || 1), 0)} ocupados</span></div>${grid}</section>`;
+    }).join("");
   }
 
   function teacherAssignments() {
@@ -607,11 +655,14 @@
   }
 
   function renderTeacherSchedule() {
-    const slots = data.schedule.filter((item) => item.teacherId === state.session.actorId && item.kind === "CLASS" && item.active);
-    const missing = teacherAssignments().filter((assignment) => !slots.some((slot) => slot.assignmentId === assignment.id));
+    const teacher = teacherById(state.session.actorId); const isCounselor = state.session.role === "COUNSELOR" && teacher?.counselorClassId;
+    const scope = isCounselor ? state.filters.counselorScheduleScope || "teacher" : "teacher";
+    const ownSlots = data.schedule.filter((item) => item.teacherId === state.session.actorId && item.kind === "CLASS" && item.active);
+    const slots = scope === "classroom" ? data.schedule.filter((item) => item.classId === teacher.counselorClassId && item.kind === "CLASS" && item.active) : ownSlots;
+    const missing = teacherAssignments().filter((assignment) => !ownSlots.some((slot) => slot.assignmentId === assignment.id));
     const conflicts = scheduleConflicts().filter((item) => item.a.teacherId === state.session.actorId || item.b.teacherId === state.session.actorId);
-    const week = weekValue(state.teacherScheduleDate || D.dateIso(0));
-    return `${pageHead("Organización docente", "Mi horario", "Elige espacios de 45 minutos. Toca una clase para cambiar el lugar de ese día o informar una ausencia.", `<button class="button secondary" data-action="report-teacher-absence">${icon("alert")} Informar ausencia</button><button class="button" data-action="new-schedule">${icon("plus")} Agregar clase</button>`)}${liveClassCard(slots)}<div class="toolbar"><label class="field"><span>Semana</span><input class="input" type="week" data-state="teacherScheduleWeek" value="${week}"></label><span class="pill info">${slots.reduce((sum, item) => sum + Number(item.span || 1), 0)} horas académicas semanales</span><span class="pill ${conflicts.length ? "warning" : "success"}">${conflicts.length} conflictos</span><span class="pill ${missing.length ? "warning" : "success"}">${missing.length ? `${missing.length} materias sin horas` : "Cobertura completa"}</span></div>${missing.length ? `<div class="notice warning" style="margin-bottom:16px">Aún faltan horas para: ${missing.map((item) => `${item.name} · ${D.classLabel(data, item.classId)}`).join(", ")}.</div>` : ""}<section class="card"><div class="card-body">${scheduleBoard(slots, true)}</div></section>`;
+    const scopeToggle = isCounselor ? `<div class="segmented-control" aria-label="Alcance del horario"><button class="${scope === "teacher" ? "active" : ""}" data-action="counselor-schedule-scope" data-scope="teacher">Mis clases</button><button class="${scope === "classroom" ? "active" : ""}" data-action="counselor-schedule-scope" data-scope="classroom">Mi salón de consejería</button></div>` : "";
+    return `${pageHead("Organización docente", scope === "classroom" ? "Horario de mi salón" : "Mi horario", "Los días siempre aparecen por columnas. Los espacios ocupados se ven, pero no se pueden volver a seleccionar.", `<button class="button secondary" data-action="report-teacher-absence">${icon("alert")} Informar ausencia</button><button class="button" data-action="new-schedule">${icon("plus")} Agregar clase</button>`)}${scopeToggle}${liveClassCard(slots)}${weekNavigator("teacherScheduleDate")}<div class="toolbar"><span class="pill info">${slots.reduce((sum, item) => sum + Number(item.span || 1), 0)} horas académicas semanales</span><span class="pill ${conflicts.length ? "warning" : "success"}">${conflicts.length} conflictos</span><span class="pill ${missing.length ? "warning" : "success"}">${missing.length ? `${missing.length} materias sin horas` : "Cobertura completa"}</span></div>${missing.length && scope === "teacher" ? `<div class="notice warning" style="margin-bottom:16px">Aún faltan horas para: ${missing.map((item) => `${item.name} · ${D.classLabel(data, item.classId)}`).join(", ")}.</div>` : ""}<section class="card"><div class="card-body">${scheduleBoard(slots, scope === "teacher", state.teacherScheduleDate)}</div></section>`;
   }
 
   function teacherAbsenceSlotsMarkup(teacherId, date, selectedIds = []) {
@@ -826,13 +877,16 @@
 
   function renderGuardianSubjects(student) {
     const assignments = data.assignments.filter((item) => item.classId === student.classId && item.active);
+    const allSlots = data.schedule.filter((item) => item.classId === student.classId && item.kind === "CLASS" && item.active);
+    const monday = weekMonday(state.guardianScheduleDate || D.dateIso(0));
     if (state.selectedSubjectId && assignments.some((item) => item.id === state.selectedSubjectId)) {
       const assignment = assignmentById(state.selectedSubjectId);
       const stats = guardianSubjectStats(student, assignment);
+      const subjectSlots = allSlots.filter((item) => item.assignmentId === assignment.id);
       const message = !assignment.exemptionEnabled ? "Esta materia no utiliza exoneración." : stats.eligible ? "Cumple los requisitos para la exoneración del examen final." : stats.average >= assignment.exemptionAverage ? "Cumple el promedio requerido. El sistema verificará también su asistencia perfecta y el avance evaluado." : `Va bien, pero todavía no puede considerarse exonerado. Falta evaluar el ${D.oneDecimal(stats.pending)}% de la materia.`;
-      return `${pageHead("Detalle por materia", assignment.name, `${D.classLabel(data, assignment.classId)} · Profesor: ${teacherById(assignment.teacherId)?.name}`, `<button class="button ghost" data-action="clear-subject">${icon("arrow")} Todas las materias</button>`)}<section class="metrics">${metric("Promedio actual", stats.performed ? D.oneDecimal(stats.average).toFixed(1) : "—", "Actividades evaluadas", "award", "", "#subject-activities")}${metric("Evaluación realizada", `${D.oneDecimal(stats.performed)}%`, "Esquema ya publicado", "clipboard", "teal", "#subject-activities")}${metric("Porcentaje conseguido", `${D.oneDecimal(stats.achieved)}%`, "Contribución acumulada", "report", "violet", "#subject-activities")}${metric("Evaluación pendiente", `${D.oneDecimal(stats.pending)}%`, "Sin proyección futura", "clock", "amber", "#subject-activities")}</section><div class="notice ${stats.eligible ? "success" : "warning"}" style="margin-bottom:16px"><strong>Exoneración:</strong> ${esc(message)} ${assignment.exemptionEnabled ? `Requisito: ${assignment.exemptionAverage.toFixed(1)} y asistencia perfecta.` : ""}</div><section class="card" id="subject-activities"><div class="card-head"><div><h3>Actividades</h3><p>Las notas solo aparecen después de que el profesor publica la evaluación.</p></div></div><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Actividad</th><th>Peso</th><th>Nota</th><th>Contribución</th><th>Estado</th></tr></thead><tbody>${stats.activities.map((activity) => { const grade = activity.grades.find((item) => item.studentId === student.id); const visibleGrade = activity.status === "PUBLISHED" && grade?.finalGrade != null; const contribution = visibleGrade ? D.oneDecimal(grade.finalGrade / 5 * activity.weight) : null; const deliveryLabel = grade?.delivery === "RECEIVED" ? "Entregado" : grade?.delivery === "NOT_DELIVERED" ? "No entregado" : grade?.delivery === "FINAL_ZERO" ? "0.0 definitivo" : "Pendiente"; return `<tr><td><strong>${esc(activity.name)}</strong><div class="muted small-text">${formatDate(activity.dueDate)}${activity.isGroup ? " · Trabajo grupal" : ""}</div>${activity.rescheduleStatus === "RESCHEDULED" ? `<span class="pill violet">Reprogramada por ausencia docente</span>` : ""}</td><td>${activity.weight}%</td><td>${visibleGrade ? D.oneDecimal(grade.finalGrade).toFixed(1) : "—"}</td><td>${contribution == null ? "—" : `${contribution.toFixed(1)}%`}</td><td><span class="pill ${grade?.delivery === "RECEIVED" ? "success" : grade?.delivery === "NOT_DELIVERED" ? "danger" : "warning"}">${deliveryLabel}</span>${activity.status !== "PUBLISHED" ? ` <span class="pill info">Nota no publicada</span>` : ""}</td></tr>`; }).join("")}</tbody></table></div></div></section>`;
+      return `${pageHead("Detalle por materia", assignment.name, `${D.classLabel(data, assignment.classId)} · Profesor: ${teacherById(assignment.teacherId)?.name}`, `<button class="button ghost" data-action="clear-subject">${icon("arrow")} Todas las materias</button>`)}<section class="metrics">${metric("Promedio actual", stats.performed ? D.oneDecimal(stats.average).toFixed(1) : "—", "Actividades evaluadas", "award", "", "#subject-activities")}${metric("Evaluación realizada", `${D.oneDecimal(stats.performed)}%`, "Esquema ya publicado", "clipboard", "teal", "#subject-activities")}${metric("Porcentaje conseguido", `${D.oneDecimal(stats.achieved)}%`, "Contribución acumulada", "report", "violet", "#subject-activities")}${metric("Evaluación pendiente", `${D.oneDecimal(stats.pending)}%`, "Sin proyección futura", "clock", "amber", "#subject-activities")}</section><div class="notice ${stats.eligible ? "success" : "warning"}" style="margin-bottom:16px"><strong>Exoneración:</strong> ${esc(message)} ${assignment.exemptionEnabled ? `Requisito: ${assignment.exemptionAverage.toFixed(1)} y asistencia perfecta.` : ""}</div>${weekNavigator("guardianScheduleDate")}<section class="card subject-schedule-card"><div class="card-head"><div><h3>Horario de ${esc(assignment.name)}</h3><p>Las demás horas permanecen visibles para conservar la posición real de cada espacio.</p></div></div><div class="card-body">${guardianScheduleBoard(student, subjectSlots, monday)}</div></section><section class="card" id="subject-activities"><div class="card-head"><div><h3>Actividades</h3><p>Las notas solo aparecen después de que el profesor publica la evaluación.</p></div></div><div class="card-body flush"><div class="table-wrap"><table><thead><tr><th>Actividad</th><th>Peso</th><th>Nota</th><th>Contribución</th><th>Estado</th></tr></thead><tbody>${stats.activities.map((activity) => { const grade = activity.grades.find((item) => item.studentId === student.id); const visibleGrade = activity.status === "PUBLISHED" && grade?.finalGrade != null; const contribution = visibleGrade ? D.oneDecimal(grade.finalGrade / 5 * activity.weight) : null; const deliveryLabel = grade?.delivery === "RECEIVED" ? "Entregado" : grade?.delivery === "NOT_DELIVERED" ? "No entregado" : grade?.delivery === "FINAL_ZERO" ? "0.0 definitivo" : "Pendiente"; return `<tr><td><strong>${esc(activity.name)}</strong><div class="muted small-text">${formatDate(activity.dueDate)}${activity.isGroup ? " · Trabajo grupal" : ""}</div>${activity.rescheduleStatus === "RESCHEDULED" ? `<span class="pill violet">Reprogramada por ausencia docente</span>` : ""}</td><td>${activity.weight}%</td><td>${visibleGrade ? D.oneDecimal(grade.finalGrade).toFixed(1) : "—"}</td><td>${contribution == null ? "—" : `${contribution.toFixed(1)}%`}</td><td><span class="pill ${grade?.delivery === "RECEIVED" ? "success" : grade?.delivery === "NOT_DELIVERED" ? "danger" : "warning"}">${deliveryLabel}</span>${activity.status !== "PUBLISHED" ? ` <span class="pill info">Nota no publicada</span>` : ""}</td></tr>`; }).join("")}</tbody></table></div></div></section>`;
     }
-    return `${pageHead("Seguimiento académico", "Materias", "Resultados comprensibles, sin proyecciones de notas futuras.", "")}<div class="subject-grid">${assignments.map((assignment) => { const stats = guardianSubjectStats(student, assignment); return `<button class="subject-card" data-action="open-guardian-subject" data-id="${assignment.id}" style="text-align:left"><div class="subject-accent" style="background:${assignment.color}"></div><h3>${esc(assignment.name)}</h3><p>${esc(teacherById(assignment.teacherId)?.name)}</p><div class="subject-stats"><div class="subject-stat"><small>Promedio actual</small><strong>${stats.performed ? D.oneDecimal(stats.average).toFixed(1) : "—"}</strong></div><div class="subject-stat"><small>Evaluado</small><strong>${D.oneDecimal(stats.performed)}%</strong></div><div class="subject-stat"><small>Conseguido</small><strong>${D.oneDecimal(stats.achieved)}%</strong></div><div class="subject-stat"><small>Exoneración</small><strong>${stats.eligible ? "Elegible" : assignment.exemptionEnabled ? "En proceso" : "No aplica"}</strong></div></div></button>`; }).join("")}</div>`;
+    return `${pageHead("Seguimiento académico", "Materias", "Resultados, clases y asistencia dentro de la misma semana.", "")}<div class="subject-grid">${assignments.map((assignment) => { const stats = guardianSubjectStats(student, assignment); return `<button class="subject-card" data-action="open-guardian-subject" data-id="${assignment.id}" style="text-align:left"><div class="subject-accent" style="background:${assignment.color}"></div><h3>${esc(assignment.name)}</h3><p>${esc(teacherById(assignment.teacherId)?.name)}</p><div class="subject-stats"><div class="subject-stat"><small>Promedio actual</small><strong>${stats.performed ? D.oneDecimal(stats.average).toFixed(1) : "—"}</strong></div><div class="subject-stat"><small>Evaluado</small><strong>${D.oneDecimal(stats.performed)}%</strong></div><div class="subject-stat"><small>Conseguido</small><strong>${D.oneDecimal(stats.achieved)}%</strong></div><div class="subject-stat"><small>Exoneración</small><strong>${stats.eligible ? "Elegible" : assignment.exemptionEnabled ? "En proceso" : "No aplica"}</strong></div></div></button>`; }).join("")}</div>${weekNavigator("guardianScheduleDate")}<section class="card subject-schedule-card"><div class="card-head"><div><h3>Horario semanal por materias</h3><p>Toca cualquier clase para ver asistencia, aula y actividades programadas.</p></div><span class="pill info">${assignments.length} materias</span></div><div class="card-body">${guardianScheduleBoard(student, allSlots, monday)}</div></section>`;
   }
 
   function renderGuardianScheduleLegacy(student) {
@@ -851,13 +905,33 @@
     return `<span class="attendance-chip ${String(record.status).toLowerCase()}">${esc(labels[record.status] || record.status)}</span>`;
   }
 
+  function guardianScheduleBoard(student, slots, monday) {
+    const schoolClass = classById(student.classId); const template = shiftById(schoolClass?.shiftTemplateId);
+    if (!template) return empty("Sin jornada", "El salón todavía no tiene una jornada configurada.");
+    const periods = D.buildShiftSlots(template); const focusDay = weeklyFocusDay(monday);
+    return `<div class="weekly-grid-wrap" data-focus-day="${focusDay}"><div class="schedule-board attendance-board weekly-grid">${D.DAYS.map((day, dayIndex) => {
+      const date = addDays(monday, dayIndex); const daySlots = slots.filter((item) => item.day === day && item.active);
+      return `<div class="day-column ${date === D.dateIso(0) ? "today" : ""}" data-day="${day}"><div class="day-title">${day}<small>${formatDate(date)}</small>${date === D.dateIso(0) ? `<span>Hoy</span>` : ""}</div>${periods.map((period) => {
+        if (period.kind === "BREAK") return `<div class="schedule-slot break"><strong>Recreo</strong><small>${period.start}–${period.end}</small></div>`;
+        const slot = daySlots.find((item) => Number(item.slotIndex) <= Number(period.index) && Number(period.index) < Number(item.slotIndex) + Number(item.span || 1));
+        if (!slot) return `<div class="schedule-slot empty-slot"><strong>Espacio ${period.index}</strong><small>${period.start}–${period.end} · Sin clase</small></div>`;
+        const continuation = Number(period.index) > Number(slot.slotIndex); const move = scheduleMoveForOccurrence(slot, date); const movedTo = move?.toSlotId === slot.id; const movedOut = move?.fromSlotId === slot.id;
+        const sourceSlot = movedTo ? data.schedule.find((item) => item.id === move.fromSlotId) : slot; const assignment = assignmentById(sourceSlot?.assignmentId);
+        const record = data.attendance.find((item) => item.studentId === student.id && item.assignmentId === sourceSlot?.assignmentId && item.date === date);
+        const count = movedOut ? 0 : activityCountForOccurrence(sourceSlot || slot, date); const absence = movedTo ? null : teacherAbsenceForSlot(slot, date);
+        const now = new Date(); const current = date === D.dateIso(0) && currentDayName(now) === day && clockMinutes(slot.start) <= now.getHours() * 60 + now.getMinutes() && now.getHours() * 60 + now.getMinutes() < clockMinutes(slot.end);
+        const destination = move ? data.schedule.find((item) => item.id === move.toSlotId) : null; const moveNote = movedTo ? `Clase adelantada desde ${sourceSlot?.start}` : movedOut ? `Esta clase se adelantó a las ${destination?.start}` : "";
+        return `<article class="schedule-slot attendance-slot ${continuation ? "continuation" : ""} ${current ? "current" : ""} ${absence ? "teacher-absent" : ""} ${move ? "moved-class" : ""}">${current ? `<span class="now-marker">Ahora</span>` : ""}<button class="slot-main" data-action="schedule-attendance-detail" data-id="${sourceSlot?.id}" data-display="${movedTo ? slot.id : ""}" data-date="${date}" data-student="${student.id}"><span class="pill info">${continuation ? "Continuación · " : `Espacio ${slot.slotIndex || "—"} · `}${period.start}–${period.end}</span><strong>${esc(assignment?.name || "Materia")}</strong><small>${esc(teacherById(assignment?.teacherId)?.name || "Profesor")} · ${esc(occurrenceRoom(movedTo ? slot : sourceSlot || slot, date))}</small>${moveNote ? `<em>${esc(moveNote)}</em>` : absence ? `<em>Profesor ausente · clase por reorganizar</em>` : guardianAttendanceBadge(record, date)}</button>${!continuation && count ? `<button class="activity-capsule" data-action="schedule-attendance-detail" data-id="${sourceSlot?.id}" data-display="${movedTo ? slot.id : ""}" data-date="${date}" data-student="${student.id}">${count} actividad${count === 1 ? "" : "es"} programada${count === 1 ? "" : "s"} →</button>` : ""}</article>`;
+      }).join("")}</div>`;
+    }).join("")}</div></div>`;
+  }
+
   function renderGuardianSchedule(student) {
     const assignments = data.assignments.filter((item) => item.classId === student.classId && item.active);
-    const slots = data.schedule.filter((item) => item.classId === student.classId && item.active);
-    const week = weekValue(state.guardianScheduleDate || D.dateIso(0)); const monday = mondayForWeek(week);
-    const scheduled = new Set(slots.filter((item) => item.kind === "CLASS").map((item) => item.assignmentId)); const missing = assignments.filter((item) => !scheduled.has(item.id));
-    const board = `<div class="weekly-grid-wrap"><div class="schedule-board attendance-board weekly-grid">${D.DAYS.map((day, dayIndex) => { const date = addDays(monday, dayIndex); return `<div class="day-column ${date === D.dateIso(0) ? "today" : ""}"><div class="day-title">${day}<small>${formatDate(date)}</small>${date === D.dateIso(0) ? `<span>Hoy</span>` : ""}</div>${slots.filter((item) => item.day === day && item.active).sort((a, b) => a.start.localeCompare(b.start)).map((slot) => { if (slot.kind === "BREAK") return `<div class="schedule-slot break"><strong>Recreo</strong><small>${slot.start}–${slot.end}</small></div>`; const move = scheduleMoveForOccurrence(slot, date); const movedTo = move?.toSlotId === slot.id; const movedOut = move?.fromSlotId === slot.id; const sourceSlot = movedTo ? data.schedule.find((item) => item.id === move.fromSlotId) : slot; const assignment = assignmentById(sourceSlot?.assignmentId); const record = data.attendance.find((item) => item.studentId === student.id && item.assignmentId === sourceSlot?.assignmentId && item.date === date); const count = movedOut ? 0 : activityCountForOccurrence(sourceSlot || slot, date); const absence = movedTo ? null : teacherAbsenceForSlot(slot, date); const current = date === D.dateIso(0) && scheduleMoment(slots).current?.id === slot.id; const destination = move ? data.schedule.find((item) => item.id === move.toSlotId) : null; const moveNote = movedTo ? `Clase adelantada desde ${sourceSlot?.start}` : movedOut ? `Esta clase se adelantó a las ${destination?.start}` : ""; return `<article class="schedule-slot attendance-slot ${current ? "current" : ""} ${absence ? "teacher-absent" : ""} ${move ? "moved-class" : ""}">${current ? `<span class="now-marker">Ahora</span>` : ""}<button class="slot-main" data-action="schedule-attendance-detail" data-id="${sourceSlot?.id}" data-display="${movedTo ? slot.id : ""}" data-date="${date}" data-student="${student.id}"><span class="pill info">Espacio ${slot.slotIndex || "—"} · ${slot.start}–${slot.end}</span><strong>${esc(assignment?.name || "Materia")}</strong><small>${esc(teacherById(assignment?.teacherId)?.name || "Profesor")} · ${esc(occurrenceRoom(movedTo ? slot : sourceSlot || slot, date))}</small>${moveNote ? `<em>${esc(moveNote)}</em>` : absence ? `<em>Profesor ausente · clase por reorganizar</em>` : guardianAttendanceBadge(record, date)}</button>${count ? `<button class="activity-capsule" data-action="schedule-attendance-detail" data-id="${sourceSlot?.id}" data-display="${movedTo ? slot.id : ""}" data-date="${date}" data-student="${student.id}">${count} actividad${count === 1 ? "" : "es"} programada${count === 1 ? "" : "s"} →</button>` : ""}</article>`; }).join("")}</div>`; }).join("")}</div></div>`;
-    return `${pageHead("Semana académica", "Horario y asistencia", "Cada bloque combina el horario subido por los profesores con la asistencia real del estudiante.", "")}<div class="toolbar"><label class="field"><span>Semana que deseas consultar</span><input class="input" type="week" data-state="guardianScheduleWeek" value="${week}"></label><span class="pill info">Toca una clase para ver el detalle</span></div>${liveClassCard(slots, "guardian")}${missing.length ? `<div class="notice warning" style="margin-bottom:16px">Horario incompleto: faltan horas para ${missing.map((item) => item.name).join(", ")}.</div>` : ""}<section class="card"><div class="card-head"><div><h3>Semana de ${esc(student.name)}</h3><p>Presente verde · tardanza ámbar · retiro naranja · ausencia roja · justificada azul.</p></div></div><div class="card-body">${board}</div></section>`;
+    const slots = data.schedule.filter((item) => item.classId === student.classId && item.kind === "CLASS" && item.active);
+    const monday = weekMonday(state.guardianScheduleDate || D.dateIso(0));
+    const scheduled = new Set(slots.map((item) => item.assignmentId)); const missing = assignments.filter((item) => !scheduled.has(item.id));
+    return `${pageHead("Semana académica", "Horario y asistencia", "Los días aparecen por columnas y la vista comienza en el día actual.", "")}${weekNavigator("guardianScheduleDate")}${liveClassCard(slots, "guardian")}${missing.length ? `<div class="notice warning" style="margin-bottom:16px">Horario incompleto: faltan horas para ${missing.map((item) => item.name).join(", ")}.</div>` : ""}<section class="card"><div class="card-head"><div><h3>Semana de ${esc(student.name)}</h3><p>Presente verde · tardanza ámbar · retiro naranja · ausencia roja · justificada azul.</p></div><span class="pill info">Desliza para recorrer los días</span></div><div class="card-body">${guardianScheduleBoard(student, slots, monday)}</div></section>`;
   }
 
   function openScheduleAttendanceDetail(slotId, date, studentId, displaySlotId = null) {
@@ -1100,7 +1174,7 @@
     });
   }
 
-  function openScheduleForm(id = null, copyFrom = null) {
+  function openScheduleFormLegacyV13(id = null, copyFrom = null) {
     const source = data.schedule.find((entry) => entry.id === (copyFrom || id));
     const sourceAssignment = assignmentById(source?.assignmentId || state.selectedAssignmentId);
     const teacher = state.session.role === "ADMIN" ? teacherById(sourceAssignment?.teacherId) : teacherById(state.session.actorId);
@@ -1155,6 +1229,85 @@
     const form = document.getElementById("modal-form"); const select = document.getElementById("schedule-slot-index");
     if (!form || !select || !form.elements.classId) return;
     select.innerHTML = scheduleSlotOptionsMarkup(form.elements.classId.value, form.elements.day.value, Number(form.elements.span.value), Number(select.value) || null, null);
+  }
+
+  function scheduleTimesForShift(shiftId, slotIndex, span = 1) {
+    const periods = D.buildShiftSlots(shiftById(shiftId)); const startPosition = periods.findIndex((item) => item.kind === "CLASS" && Number(item.index) === Number(slotIndex));
+    const selected = periods.slice(startPosition, startPosition + Number(span));
+    if (startPosition < 0 || selected.length !== Number(span) || selected.some((item) => item.kind !== "CLASS")) return null;
+    return { start: selected[0].start, end: selected[selected.length - 1].end };
+  }
+  function scheduleCompatibleClasses(catalogId, shiftId) {
+    const catalog = subjectCatalogById(catalogId);
+    return data.classes.filter((item) => item.active && item.shiftTemplateId === shiftId && (!catalog?.level || catalog.level === "Todos" || catalog.level === item.level) && (!catalog?.programId || catalog.programId === "prog-no-aplica" || catalog.programId === item.programId) && (!catalog?.shiftTemplateId || catalog.shiftTemplateId === item.shiftTemplateId));
+  }
+  function scheduleClassOptionsMarkup(catalogId, shiftId, selectedClassId) {
+    const classes = scheduleCompatibleClasses(catalogId, shiftId);
+    return classes.length ? classes.map((item) => option(item.id, `${D.classLabel(data, item.id)} · ${programById(item.programId)?.name || "Sin programa"}`, selectedClassId)).join("") : `<option value="">No hay salones compatibles en esta jornada</option>`;
+  }
+  function scheduleAvailabilityMarkup(teacherId, shiftId, classId, span = 1, selectedDay = "", selectedSlot = null, editingId = null) {
+    const template = shiftById(shiftId); if (!template) return `<div class="notice warning">Selecciona una jornada.</div>`;
+    const periods = D.buildShiftSlots(template);
+    return `<div class="schedule-picker weekly-grid">${D.DAYS.map((day) => `<div class="picker-day" data-day="${day}"><div class="day-title">${day}</div>${periods.map((period) => {
+      if (period.kind === "BREAK") return `<div class="picker-space break"><strong>Recreo</strong><small>${period.start}–${period.end}</small></div>`;
+      const times = scheduleTimesForShift(shiftId, period.index, span); if (!times) return `<div class="picker-space unavailable"><strong>Espacio ${period.index}</strong><small>No admite ${span} espacios seguidos</small></div>`;
+      const collisions = data.schedule.filter((slot) => slot.id !== editingId && slot.active && slot.kind === "CLASS" && slot.day === day && slot.start < times.end && times.start < slot.end);
+      const teacherBusy = collisions.some((slot) => slot.teacherId === teacherId); const classBusy = classId && collisions.some((slot) => slot.classId === classId);
+      const occupied = teacherBusy || classBusy; const checked = !occupied && day === selectedDay && Number(period.index) === Number(selectedSlot);
+      const reason = teacherBusy ? "Profesor ocupado" : classBusy ? "Salón ocupado" : "Disponible";
+      return `<label class="picker-space ${occupied ? "occupied" : "available"}"><input type="radio" name="scheduleChoice" value="${day}|${period.index}" ${occupied ? "disabled" : ""} ${checked ? "checked" : ""}><strong>Espacio ${period.index}</strong><small>${period.start}–${times.end}</small><em>${reason}</em></label>`;
+    }).join("")}</div>`).join("")}</div>`;
+  }
+  function refreshScheduleGrid() {
+    const form = document.getElementById("modal-form"); const grid = document.getElementById("schedule-availability-grid");
+    if (!form || !grid || !form.elements.shiftTemplateId) return;
+    const previousChoice = form.querySelector('[name="scheduleChoice"]:checked')?.value?.split("|") || [];
+    const catalogId = form.elements.catalogId.value; const shiftId = form.elements.shiftTemplateId.value;
+    const classSelect = form.elements.classId; const previousClass = classSelect.value;
+    classSelect.innerHTML = scheduleClassOptionsMarkup(catalogId, shiftId, previousClass);
+    const validClass = [...classSelect.options].some((item) => item.value === previousClass); if (validClass) classSelect.value = previousClass;
+    grid.innerHTML = scheduleAvailabilityMarkup(form.dataset.teacherId, shiftId, classSelect.value, Number(form.elements.span.value), previousChoice[0] || form.dataset.selectedDay, previousChoice[1] || form.dataset.selectedSlot, form.dataset.editingId || null);
+  }
+
+  function openScheduleForm(id = null, copyFrom = null, preset = {}) {
+    const source = data.schedule.find((entry) => entry.id === (copyFrom || id)); const sourceAssignment = assignmentById(source?.assignmentId || state.selectedAssignmentId);
+    const teacher = state.session.role === "ADMIN" ? teacherById(sourceAssignment?.teacherId || source?.teacherId) : teacherById(state.session.actorId);
+    if (!teacher) return toast("No se encontró el perfil docente responsable.", "error");
+    const catalogIds = state.session.role === "ADMIN" ? data.subjectCatalog.filter((item) => item.active).map((item) => item.id) : [...new Set([...(teacher.subjectCatalogIds || []), teacher.primarySubjectCatalogId, ...teacherAssignments().map((item) => item.catalogId)].filter(Boolean))];
+    const catalogs = data.subjectCatalog.filter((item) => item.active && catalogIds.includes(item.id)); if (!catalogs.length) return toast("Crea primero tu materia desde Mis materias.", "error");
+    const selectedCatalogId = sourceAssignment?.catalogId || teacher.primarySubjectCatalogId || catalogs[0].id;
+    const shiftIds = [...new Set(data.classes.filter((item) => item.active && item.shiftTemplateId).map((item) => item.shiftTemplateId))];
+    const shifts = data.shiftTemplates.filter((item) => item.active && shiftIds.includes(item.id)); if (!shifts.length) return toast("Todavía no existe un salón con jornada configurada.", "error");
+    const selectedShiftId = preset.shiftId || classById(source?.classId)?.shiftTemplateId || subjectCatalogById(selectedCatalogId)?.shiftTemplateId || shifts[0].id;
+    const compatibleClasses = scheduleCompatibleClasses(selectedCatalogId, selectedShiftId); const selectedClassId = source?.classId || compatibleClasses[0]?.id || "";
+    const selectedSpan = Number(source?.span || 1); const selectedDay = preset.day || source?.day || "Lunes"; const selectedSlot = Number(preset.slotIndex || source?.slotIndex || 1);
+    const grid = scheduleAvailabilityMarkup(teacher.id, selectedShiftId, selectedClassId, selectedSpan, selectedDay, selectedSlot, id);
+    showModal(`${id ? "Editar" : "Agregar"} clase al horario`, `${formSteps(["Materia", "Jornada", "Espacio", "Grado y salón"], 4)}<div class="form-grid"><label class="field"><span>1. Materia</span><select class="select" name="catalogId" data-schedule-grid-control>${catalogs.map((entry) => option(entry.id, entry.name, selectedCatalogId)).join("")}</select></label><label class="field"><span>2. Jornada</span><select class="select" name="shiftTemplateId" data-schedule-grid-control>${shifts.map((entry) => option(entry.id, `${entry.name} · desde ${entry.start}`, selectedShiftId)).join("")}</select></label><label class="field"><span>Duración</span><select class="select" name="span" data-schedule-grid-control>${option("1", "1 espacio · 45 minutos", selectedSpan)}${option("2", "2 espacios seguidos · 90 minutos", selectedSpan)}</select></label><label class="field"><span>3. Grado y salón</span><select class="select" name="classId" data-schedule-grid-control required>${scheduleClassOptionsMarkup(selectedCatalogId, selectedShiftId, selectedClassId)}</select></label><div class="field wide"><span>4. Selecciona un espacio disponible</span><div class="picker-legend"><span><i class="available"></i>Disponible</span><span><i class="occupied"></i>Ocupado</span><span><i class="break"></i>Recreo</span></div><div id="schedule-availability-grid" class="schedule-picker-wrap">${grid}</div><span class="hint">Los ocupados permanecen visibles, pero no se pueden seleccionar.</span></div><label class="field wide"><span>Lugar habitual (opcional)</span><input class="input" name="room" list="school-locations" value="${attr(source?.habitualRoom || source?.room || "")}" placeholder="Vacío = aula del salón"><datalist id="school-locations">${data.locations.filter((item) => item.active).map((item) => `<option value="${attr(item.name)}"></option>`).join("")}</datalist></label><div class="notice success wide">La hora se calcula desde la jornada. Al guardar, el bloque aparecerá en el mismo horario semanal para profesor, consejero, acudiente y administración.</div>${id ? `<div class="wide list-actions left"><button type="button" class="button ghost" data-action="duplicate-schedule" data-id="${source.id}">${icon("copy")} Duplicar bloque</button><button type="button" class="button ghost danger-text" data-action="delete-schedule" data-id="${source.id}">${icon("trash")} Eliminar bloque</button></div>` : ""}</div>`, "Guardar horario", (form) => {
+      const choice = String(form.get("scheduleChoice") || "").split("|"); if (choice.length !== 2) return showFormError("Selecciona un espacio disponible en la cuadrícula."), false;
+      const day = choice[0]; const slotIndex = Number(choice[1]); const span = Number(form.get("span")); const classId = form.get("classId"); const schoolClass = classById(classId);
+      if (!schoolClass) return showFormError("Selecciona un grado y salón disponible."), false;
+      const times = scheduleTimes(classId, slotIndex, span); if (!times) return showFormError("Ese bloque cruza un recreo o no tiene espacios consecutivos."), false;
+      const catalog = subjectCatalogById(form.get("catalogId")); if (!scheduleCompatibleClasses(catalog.id, schoolClass.shiftTemplateId).some((item) => item.id === classId)) return showFormError("La materia no corresponde al nivel, bachillerato o jornada de ese salón."), false;
+      const blocking = data.schedule.filter((slot) => slot.id !== id && slot.active && slot.kind === "CLASS" && slot.day === day && slot.start < times.end && times.start < slot.end && (slot.teacherId === teacher.id || slot.classId === classId));
+      if (blocking.length) return showFormError("Ese espacio acaba de ser ocupado por el profesor o por el salón. Selecciona otro."), false;
+      let assignment = data.assignments.find((entry) => entry.active && entry.classId === classId && entry.catalogId === catalog.id);
+      if (assignment && assignment.teacherId !== teacher.id) return showFormError(`Esta materia ya está a cargo de ${teacherById(assignment.teacherId)?.name}. La administración debe registrar el reemplazo.`), false;
+      if (!assignment) { assignment = { id: D.uid("as"), catalogId: catalog.id, name: catalog.name, classId, teacherId: teacher.id, color: "#2b73c2", attendanceWeight: 5, exemptionEnabled: true, exemptionAverage: 4.5, latePenalty: 0.5, trimester: data.institution.currentTrimester, active: true }; data.assignments.push(assignment); }
+      const room = form.get("room").trim() || schoolClass.room || "Aula del salón"; if (!data.locations.some((item) => item.active && D.normalize(item.name) === D.normalize(room)) && room !== schoolClass.room) data.locations.push({ id: D.uid("loc"), name: room, active: true, createdBy: teacher.id });
+      const values = { assignmentId: assignment.id, classId, teacherId: teacher.id, day, slotIndex, span, start: times.start, end: times.end, room, habitualRoom: room, kind: "CLASS", active: true };
+      const locationConflicts = data.schedule.filter((slot) => slot.id !== id && slot.active && slot.kind === "CLASS" && slot.day === day && slot.start < times.end && times.start < slot.end && slot.classId !== classId && D.normalize(slot.habitualRoom || slot.room) === D.normalize(room));
+      if (id) Object.assign(source, values); else data.schedule.push({ id: D.uid("sch"), ...values });
+      D.addAudit(data, state.session.actorId, id ? "MODIFICÓ HORARIO" : "AGREGÓ HORARIO", `${assignment.name} · ${D.classLabel(data, classId)} · ${day} · espacio ${slotIndex}${span === 2 ? `–${slotIndex + 1}` : ""}`, "IMPORTANT");
+      if (locationConflicts.length) { D.addNotification(data, "ADMIN", "admin", "SCHEDULE", "Lugar compartido por revisar", `${day} ${times.start}: ${room} aparece en más de una clase.`); persist("Horario guardado; la administración recibió una alerta sobre el lugar.", "error"); }
+      else persist("Horario guardado y conectado con el salón.");
+      return true;
+    }, false);
+    const form = document.getElementById("modal-form");
+    if (form) {
+      form.dataset.teacherId = teacher.id; form.dataset.editingId = id || ""; form.dataset.selectedDay = selectedDay; form.dataset.selectedSlot = String(selectedSlot);
+      const classStep = form.elements.classId?.closest?.("label")?.querySelector?.("span"); if (classStep) classStep.textContent = "4. Grado y salón";
+      const gridStep = document.getElementById("schedule-availability-grid")?.parentElement?.querySelector?.(":scope > span"); if (gridStep) gridStep.textContent = "3. Selecciona un espacio disponible";
+    }
   }
 
   function openActivityFormLegacy(id = null) {
@@ -1428,6 +1581,9 @@
     if (action === "toggle-menu") { document.querySelector(".sidebar")?.classList.add("open"); document.querySelector(".mobile-overlay")?.classList.add("show"); }
     if (action === "close-menu") { document.querySelector(".sidebar")?.classList.remove("open"); document.querySelector(".mobile-overlay")?.classList.remove("show"); }
     if (action === "set-view") { state.view = target.dataset.view; document.querySelector(".sidebar")?.classList.remove("open"); document.querySelector(".mobile-overlay")?.classList.remove("show"); render(); }
+    if (action === "change-schedule-week") { const key = target.dataset.key; if (["teacherScheduleDate", "guardianScheduleDate"].includes(key)) { state[key] = addDays(weekMonday(state[key] || D.dateIso(0)), Number(target.dataset.days)); render(); } }
+    if (action === "schedule-current-week") { const key = target.dataset.key; if (["teacherScheduleDate", "guardianScheduleDate"].includes(key)) { state[key] = D.dateIso(0); render(); } }
+    if (action === "counselor-schedule-scope") { state.filters.counselorScheduleScope = target.dataset.scope; render(); }
     if (action === "back-admin") { state.session = { role: "ADMIN", actorId: state.session.adminId || "admin", adminOrigin: false, adminId: null }; state.view = "dashboard"; saveSession(); render(); }
     if (action === "admin-view-as") openViewAs();
     if (action === "admin-view-role") openViewAs(target.dataset.role);
@@ -1460,7 +1616,7 @@
       const assignment = assignmentById(target.dataset.id);
       confirmModal("Eliminar asignación", `${assignment.name} dejará de estar activa en ${D.classLabel(data, assignment.classId)}. Actividades, notas y asistencia conservarán su historial.`, "Eliminar", () => { assignment.active = false; assignment.deletedAt = D.nowIso(); data.schedule.filter((slot) => slot.assignmentId === assignment.id).forEach((slot) => { slot.active = false; }); data.trash.unshift({ id: D.uid("del"), entity: "assignment", entityId: assignment.id, label: `${assignment.name} · ${D.classLabel(data, assignment.classId)}`, deletedAt: assignment.deletedAt, deletedBy: state.session.actorId }); D.addAudit(data, state.session.actorId, "ELIMINÓ ASIGNACIÓN", `${assignment.name} · ${D.classLabel(data, assignment.classId)}`, "IMPORTANT"); persist("Asignación eliminada; historial conservado."); render(); }, true);
     }
-    if (action === "new-schedule") openScheduleForm();
+    if (action === "new-schedule") openScheduleForm(null, null, { shiftId: target.dataset.shift || null, day: target.dataset.day || null, slotIndex: target.dataset.slot || null });
     if (action === "duplicate-schedule") openScheduleForm(null, target.dataset.id);
     if (action === "delete-schedule") {
       const slot = data.schedule.find((item) => item.id === target.dataset.id);
@@ -1611,6 +1767,7 @@
     if (target.dataset.state === "guardianScheduleWeek") { state.guardianScheduleDate = mondayForWeek(target.value); render(); }
     if (target.dataset.state === "teacherScheduleWeek") { state.teacherScheduleDate = mondayForWeek(target.value); render(); }
     if (target.dataset.scheduleControl !== undefined) refreshScheduleSlotOptions();
+    if (target.dataset.scheduleGridControl !== undefined) refreshScheduleGrid();
     if (target.dataset.teacherAbsenceDate !== undefined) { const box = document.getElementById("teacher-absence-slots"); if (box) box.innerHTML = teacherAbsenceSlotsMarkup(state.session.actorId, target.value, []); }
     if (target.dataset.plannerControl !== undefined) {
       if (target.name === "catalogId") {
